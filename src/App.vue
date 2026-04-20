@@ -5,8 +5,8 @@
         <p class="eyebrow">USC semester visualization</p>
         <h1>Social circle over time</h1>
         <p class="intro">
-          Click a student on the map to switch their semester story. The visualization shows how
-          their places, people, and connectedness change across time.
+          This version uses synthetic Strava/Fitbit-style data: weekly distance moved, places visited,
+          and inferred contacts. The social circle can shrink, hold steady, or expand depending on the student.
         </p>
       </div>
 
@@ -16,12 +16,12 @@
           <strong>{{ selectedStudent.name }}</strong>
         </div>
         <div class="hero-stat">
-          <span class="label">Connectedness</span>
-          <strong>{{ weekData.connectedness }}/100</strong>
+          <span class="label">Weekly distance</span>
+          <strong>{{ weekData.distanceKm.toFixed(1) }} km</strong>
         </div>
         <div class="hero-stat">
-          <span class="label">Radius</span>
-          <strong>{{ weekData.socialRadiusKm.toFixed(2) }} km</strong>
+          <span class="label">Connectedness</span>
+          <strong>{{ weekData.connectedness }}/100</strong>
         </div>
       </div>
     </header>
@@ -51,29 +51,21 @@
           :year="selectedStudent.year"
           :bio="selectedStudent.bio"
           :connectedness="weekData.connectedness"
+          :distance-km="weekData.distanceKm"
+          :steps="weekData.steps"
+          :active-minutes="weekData.activeMinutes"
           :active-people="weekData.activePeople.length"
           :active-places="weekData.activePlaces.length"
           :social-radius-km="weekData.socialRadiusKm"
         />
 
         <TrendChart
-          :values="selectedStudent.weeks.map((item) => item.connectedness)"
-          :active-week="week"
           :student-name="selectedStudent.name"
+          :values="selectedStudent.weeks.map((item) => item.distanceKm)"
+          :connectedness-series="selectedStudent.weeks.map((item) => item.connectedness)"
+          :radius-series="selectedStudent.weeks.map((item) => item.socialRadiusKm)"
+          :active-week="week"
         />
-
-        <section class="panel note-panel">
-          <div class="section-header">
-            <div>
-              <p class="eyebrow">Selected week</p>
-              <h2>{{ currentLabel }}</h2>
-            </div>
-          </div>
-          <p>
-            The student markers are clickable. Each one swaps the map and sidebar to that person's
-            synthetic USC semester data.
-          </p>
-        </section>
       </aside>
     </main>
   </div>
@@ -86,14 +78,14 @@ import TimeSlider from './components/TimeSlider.vue'
 import SocialStats from './components/SocialStats.vue'
 import TrendChart from './components/TrendChart.vue'
 import StudentRoster from './components/StudentRoster.vue'
-import { WEEK_COUNT, getStudentById, getStudentMarkers, students, timelineWeeks } from './data/uscSemester.js'
+import { WEEK_COUNT, getStudentById, getStudentMarkers, students, timelineWeeks, getWeekData } from './data/uscSemester.js'
 
 const week = ref(0)
 const selectedStudentId = ref(students[0].id)
-const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN || window.__MAPBOX_TOKEN__ || ''
+const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN || ''
 
 const selectedStudent = computed(() => getStudentById(selectedStudentId.value))
-const weekData = computed(() => selectedStudent.value.weeks[week.value])
+const weekData = computed(() => getWeekData(selectedStudentId.value, week.value))
 const currentLabel = computed(() => timelineWeeks[week.value].label)
 const studentMarkers = computed(() => getStudentMarkers(week.value, selectedStudentId.value))
 </script>
@@ -112,14 +104,6 @@ const studentMarkers = computed(() => getStudentMarkers(week.value, selectedStud
   margin-bottom: 24px;
 }
 
-.eyebrow {
-  margin: 0 0 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  font-size: 12px;
-  color: #8fb4ff;
-}
-
 h1 {
   margin: 0;
   font-size: clamp(2rem, 3vw, 3.4rem);
@@ -128,7 +112,7 @@ h1 {
 
 .intro {
   margin: 14px 0 0;
-  max-width: 720px;
+  max-width: 760px;
   color: #a8b7ce;
   font-size: 16px;
   line-height: 1.55;
@@ -143,7 +127,7 @@ h1 {
   border-radius: 22px;
   padding: 16px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.26);
-  min-width: min(100%, 540px);
+  min-width: min(100%, 560px);
 }
 
 .hero-stat {
@@ -176,45 +160,6 @@ h1 {
   gap: 16px;
 }
 
-.panel {
-  background: rgba(11, 18, 32, 0.82);
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  border-radius: 28px;
-  box-shadow: 0 30px 100px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(18px);
-}
-
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: center;
-  margin-bottom: 14px;
-}
-
-.section-header h2 {
-  margin: 0;
-}
-
-.metric {
-  padding: 10px 14px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.06);
-  color: #d8e7fb;
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-.note-panel {
-  padding: 18px;
-}
-
-.note-panel p {
-  margin: 0;
-  color: #c6d4e8;
-  line-height: 1.65;
-}
-
 @media (max-width: 1080px) {
   .hero,
   .layout {
@@ -234,10 +179,6 @@ h1 {
 
   .hero-card {
     grid-template-columns: 1fr;
-  }
-
-  .panel {
-    border-radius: 22px;
   }
 }
 </style>

@@ -3,26 +3,25 @@
     <div class="section-header">
       <div>
         <p class="eyebrow">Students</p>
-        <h2>Pick a person</h2>
+        <h2>Click a student</h2>
+        <p class="muted">Each student has synthetic Strava/Fitbit-style mobility data.</p>
       </div>
     </div>
 
-    <div class="roster">
+    <div class="roster-list">
       <button
         v-for="student in students"
         :key="student.id"
-        class="student-card"
+        class="roster-item"
         :class="{ active: student.id === selectedStudentId }"
-        type="button"
         @click="$emit('select-student', student.id)"
       >
-        <span class="color-dot" :style="{ background: student.color }"></span>
-        <span class="student-copy">
+        <span class="swatch" :style="{ background: student.color }"></span>
+        <span class="meta">
           <strong>{{ student.name }}</strong>
-          <span>{{ student.major }} · {{ student.year }}</span>
-          <small>{{ student.bio }}</small>
+          <small>{{ student.major }} · {{ student.year }}</small>
         </span>
-        <span class="score">{{ student.weeks[week].connectedness }}</span>
+        <span class="week-score">{{ student.weeks[week].connectedness }}/100</span>
       </button>
     </div>
   </section>
@@ -39,25 +38,65 @@ defineEmits(['select-student'])
 </script>
 
 <style scoped>
-.roster-panel { padding: 18px; }
-.roster { display: grid; gap: 10px; }
-.student-card {
+.roster-panel {
+  padding: 18px;
+}
+
+.section-header {
+  margin-bottom: 14px;
+}
+
+.section-header h2 {
+  margin: 0;
+}
+
+.roster-list {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+}
+
+.roster-item {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: center;
   gap: 12px;
-  align-items: start;
   width: 100%;
-  padding: 12px;
-  border: 1px solid rgba(148,163,184,0.14);
-  border-radius: 18px;
-  background: rgba(255,255,255,0.03);
-  color: inherit;
   text-align: left;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 12px;
+  color: #e5eefb;
   cursor: pointer;
 }
-.student-card.active { border-color: rgba(158,208,255,0.55); background: rgba(158,208,255,0.08); }
-.color-dot { width: 14px; height: 14px; border-radius: 999px; margin-top: 4px; }
-.student-copy { display: grid; gap: 4px; }
-.student-copy span, .student-copy small { color: #8fa3bd; line-height: 1.4; }
-.score { color: #e9f4ff; font-weight: 700; }
+
+.roster-item.active {
+  border-color: rgba(158, 208, 255, 0.6);
+  background: rgba(158, 208, 255, 0.08);
+}
+
+.swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.05);
+}
+
+.meta {
+  display: grid;
+  gap: 2px;
+}
+
+.meta strong {
+  font-size: 14px;
+}
+
+.meta small {
+  color: #9aa9c3;
+}
+
+.week-score {
+  font-size: 13px;
+  color: #d8e7fb;
+}
 </style>

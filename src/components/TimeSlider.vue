@@ -2,18 +2,19 @@
   <section class="panel slider-panel">
     <div class="section-header">
       <div>
-        <p class="eyebrow">Time</p>
+        <p class="eyebrow">Timeline</p>
         <h2>{{ label }}</h2>
+        <p class="muted">Use the slider to scrub through the semester.</p>
       </div>
       <div class="metric">Week {{ week + 1 }} / {{ maxWeeks }}</div>
     </div>
 
-    <input v-model.number="model" class="slider" type="range" :min="0" :max="maxWeeks - 1" />
+    <input v-model.number="model" class="range" type="range" :min="0" :max="maxWeeks - 1" />
 
-    <div class="tick-row">
+    <div class="ticks">
       <span>Start</span>
       <span>Midterm</span>
-      <span>Finals</span>
+      <span>Wrap-up</span>
     </div>
   </section>
 </template>
@@ -36,7 +37,40 @@ const model = computed({
 </script>
 
 <style scoped>
-.slider-panel { padding: 18px; }
-.slider { width: 100%; margin: 18px 0 10px; }
-.tick-row { display: flex; justify-content: space-between; color: #8aa0bc; font-size: 12px; }
+.slider-panel {
+  padding: 18px;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.section-header h2 {
+  margin: 0;
+}
+
+.metric {
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #d8e7fb;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.range {
+  width: 100%;
+}
+
+.ticks {
+  display: flex;
+  justify-content: space-between;
+  color: #8091ae;
+  font-size: 12px;
+  margin-top: 10px;
+}
 </style>

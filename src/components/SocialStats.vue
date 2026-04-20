@@ -4,30 +4,44 @@
       <div>
         <p class="eyebrow">Snapshot</p>
         <h2>{{ studentName }}</h2>
-        <p class="muted">{{ major }} · {{ year }}</p>
+        <p class="muted">The numbers come from synthetic activity logs, not direct loneliness measurement.</p>
       </div>
     </div>
 
     <div class="stats-grid">
-      <div class="stat">
-        <span class="stat-label">Connectedness</span>
-        <strong>{{ connectedness }}/100</strong>
+      <div class="stat-card">
+        <span class="label">Distance moved</span>
+        <strong>{{ distanceKm.toFixed(1) }} km</strong>
       </div>
-      <div class="stat">
-        <span class="stat-label">Active people</span>
-        <strong>{{ activePeople }}</strong>
+      <div class="stat-card">
+        <span class="label">Steps</span>
+        <strong>{{ steps.toLocaleString() }}</strong>
       </div>
-      <div class="stat">
-        <span class="stat-label">Active places</span>
+      <div class="stat-card">
+        <span class="label">Active minutes</span>
+        <strong>{{ activeMinutes }}</strong>
+      </div>
+      <div class="stat-card">
+        <span class="label">Places visited</span>
         <strong>{{ activePlaces }}</strong>
       </div>
-      <div class="stat">
-        <span class="stat-label">Social radius</span>
+      <div class="stat-card">
+        <span class="label">Contacts active</span>
+        <strong>{{ activePeople }}</strong>
+      </div>
+      <div class="stat-card">
+        <span class="label">Social radius</span>
         <strong>{{ socialRadiusKm.toFixed(2) }} km</strong>
       </div>
     </div>
 
-    <p class="bio">{{ bio }}</p>
+    <div class="bio">
+      <p>
+        <strong>{{ year }} {{ major }}</strong>
+      </p>
+      <p>{{ bio }}</p>
+      <p class="muted">Connectedness score: {{ connectedness }}/100</p>
+    </div>
   </section>
 </template>
 
@@ -38,6 +52,9 @@ defineProps({
   year: { type: String, required: true },
   bio: { type: String, required: true },
   connectedness: { type: Number, required: true },
+  distanceKm: { type: Number, required: true },
+  steps: { type: Number, required: true },
+  activeMinutes: { type: Number, required: true },
   activePeople: { type: Number, required: true },
   activePlaces: { type: Number, required: true },
   socialRadiusKm: { type: Number, required: true },
@@ -45,10 +62,56 @@ defineProps({
 </script>
 
 <style scoped>
-.stats-panel { padding: 18px; }
-.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
-.stat { padding: 12px; border-radius: 16px; background: rgba(255,255,255,0.03); }
-.stat-label { display: block; font-size: 12px; color: #91a4bf; margin-bottom: 6px; }
-.bio { margin: 14px 0 0; color: #c4d1e5; line-height: 1.6; }
-.muted { margin: 8px 0 0; color: #8ea3bf; }
+.stats-panel {
+  padding: 18px;
+}
+
+.section-header {
+  margin-bottom: 14px;
+}
+
+.section-header h2 {
+  margin: 0;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.stat-card {
+  padding: 12px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  display: grid;
+  gap: 6px;
+}
+
+.label {
+  color: #9aa9c3;
+  font-size: 12px;
+}
+
+.stat-card strong {
+  font-size: 20px;
+}
+
+.bio {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  line-height: 1.6;
+}
+
+.bio p {
+  margin: 0 0 10px;
+}
+
+.bio p:last-child {
+  margin-bottom: 0;
+}
 </style>
