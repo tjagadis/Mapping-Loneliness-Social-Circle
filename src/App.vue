@@ -87,17 +87,13 @@
         :token="mapboxToken"
         @select-student="selectedStudentId = $event"
       />
-        <TimeSlider v-model:week="week" :max-weeks="WEEK_COUNT" :label="currentLabel" />
-
-      <aside class="side">
-        <StudentRoster
-          :students="visibleStudentsWithRisk"
-          :selected-student-id="selectedStudentId"
-          :week="week"
-          @select-student="selectedStudentId = $event"
+<TrendChart
+          :student-name="selectedStudent.name"
+          :values="selectedStudent.weeks.map((item) => item.distanceKm)"
+          :connectedness-series="selectedStudent.weeks.map((item) => item.connectedness)"
+          :radius-series="selectedStudent.weeks.map((item) => item.socialRadiusKm)"
+          :active-week="week"
         />
-
-
         <SocialStats
           :student-name="selectedStudent.name"
           :major="selectedStudent.major"
@@ -111,14 +107,22 @@
           :active-places="weekData.activePlaces.length"
           :social-radius-km="weekData.socialRadiusKm"
         />
+      <aside class="side">
+              <TimeSlider v-model:week="week" :max-weeks="WEEK_COUNT" :label="currentLabel" />
 
-        <TrendChart
-          :student-name="selectedStudent.name"
-          :values="selectedStudent.weeks.map((item) => item.distanceKm)"
-          :connectedness-series="selectedStudent.weeks.map((item) => item.connectedness)"
-          :radius-series="selectedStudent.weeks.map((item) => item.socialRadiusKm)"
-          :active-week="week"
-        />
+        <div class="roster-scroll">
+  <StudentRoster
+    :students="visibleStudentsWithRisk"
+    :selected-student-id="selectedStudentId"
+    :week="week"
+    @select-student="selectedStudentId = $event"
+  />
+</div>
+
+
+        
+
+        
       </aside>
     </main>
   </div>
@@ -266,7 +270,11 @@ h1 {
   font-size: 16px;
   line-height: 1.55;
 }
-
+.roster-scroll {
+  max-height: 300px;   /* adjust this */
+  overflow-y: auto;
+  padding-right: 6px;  /* prevents scrollbar overlap */
+}
 .hero-card {
   display: grid;
   grid-template-columns: repeat(3, minmax(120px, 1fr));
