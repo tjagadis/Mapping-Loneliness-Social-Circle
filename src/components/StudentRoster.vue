@@ -16,7 +16,7 @@
         :class="{ active: student.id === selectedStudentId }"
         @click="$emit('select-student', student.id)"
       >
-        <span class="swatch" :style="{ background: student.color }"></span>
+        <span class="swatch" :style="{ background: student.riskColor || student.color }"></span>
         <span class="meta">
           <strong>{{ student.name }}</strong>
           <small>{{ student.major }} · {{ student.year }}</small>

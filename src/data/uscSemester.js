@@ -55,6 +55,27 @@ function shiftPoint([lng, lat], lngDelta, latDelta) {
   return [lng + lngDelta, lat + latDelta]
 }
 
+function slugify(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function getItemGroup(name, kind) {
+  const lower = String(name || '').toLowerCase()
+
+  if (lower.includes('dorm') || lower.includes('apartment') || lower.includes('roommate')) return 'housing'
+  if (lower.includes('library') || lower.includes('engineering') || lower.includes('arts') || lower.includes('lab') || lower.includes('study') || lower.includes('project') || lower.includes('mentor')) return 'academic'
+  if (lower.includes('wellness')) return 'wellness'
+  if (lower.includes('gym') || lower.includes('stadium') || lower.includes('sports') || lower.includes('teammate')) return 'athletics'
+  if (lower.includes('cafe') || lower.includes('dining')) return 'dining'
+  if (lower.includes('club') || lower.includes('service') || lower.includes('orientation')) return 'clubs'
+  if (lower.includes('student center') || lower.includes('plaza') || lower.includes('weekend') || lower.includes('friend') || lower.includes('social')) return 'social'
+
+  return kind === 'person' ? 'social' : 'other'
+}
+
 function buildPlace(place, week, phase) {
   if (week < place.start || week > place.end) return null
 
@@ -68,7 +89,9 @@ function buildPlace(place, week, phase) {
 
   return {
     id: place.id,
+    venueId: slugify(place.name),
     name: place.name,
+    group: getItemGroup(place.name, 'place'),
     point: shiftPoint(
       place.point,
       wave(week, place.lngJitter, place.lngPeriod, phase + place.phase),
@@ -92,6 +115,7 @@ function buildPerson(person, week, phase) {
   return {
     id: person.id,
     name: person.name,
+    group: getItemGroup(person.name, 'person'),
     point: shiftPoint(
       person.point,
       wave(week, person.lngJitter, person.lngPeriod, phase + person.phase),
@@ -103,52 +127,37 @@ function buildPerson(person, week, phase) {
 
 function buildWeek(def, week) {
   const phase = def.phase
+  const mobilityScore = clamp(
+    def.mobilityBase + week * def.mobilitySlope + wave(week, def.mobilityWave, def.mobilityPeriod, phase),
+    0.8,
+    9.5,
+  )
 
-  const mobilityScore = def.strictDecline
-    ? clamp(def.mobilityStart - week * def.mobilityStep, 0.8, 9.5)
-    : clamp(
-        def.mobilityBase + week * def.mobilitySlope + wave(week, def.mobilityWave, def.mobilityPeriod, phase),
-        0.8,
-        9.5,
-      )
-
-  const distanceKm = def.strictDecline
-    ? clamp(def.distanceStart - week * def.distanceStep, 0.7, 18)
-    : clamp(
-        def.distanceBase + week * def.distanceSlope + wave(week, def.distanceWave, def.distancePeriod, phase + 0.4),
-        0.7,
-        18,
-      )
+  const distanceKm = clamp(
+    def.distanceBase + week * def.distanceSlope + wave(week, def.distanceWave, def.distancePeriod, phase + 0.4),
+    0.7,
+    18,
+  )
 
   const steps = Math.round(distanceKm * 1250 + mobilityScore * 900 + 1800 + wave(week, 500, 4, phase))
   const activeMinutes = Math.round(28 + distanceKm * 11 + mobilityScore * 8 + wave(week, 12, 5, phase + 0.2))
+  const connectedness = clamp(
+    Math.round(def.connectednessBase + week * def.connectednessSlope + wave(week, def.connectednessWave, def.connectednessPeriod, phase + 0.9)),
+    8,
+    98,
+  )
 
-  const connectedness = def.strictDecline
-    ? clamp(Math.round(def.connectednessStart - week * def.connectednessStep), 8, 98)
-    : clamp(
-        Math.round(def.connectednessBase + week * def.connectednessSlope + wave(week, def.connectednessWave, def.connectednessPeriod, phase + 0.9)),
-        8,
-        98,
-      )
+  const socialRadiusKm = clamp(
+    0.55 + distanceKm * 0.12 + connectedness * 0.012 + wave(week, def.radiusWave, def.radiusPeriod, phase + 0.5),
+    0.4,
+    3.4,
+  )
 
-  const socialRadiusKm = def.strictDecline
-    ? clamp(def.radiusStart - week * def.radiusStep, 0.4, 3.4)
-    : clamp(
-        0.55 + distanceKm * 0.12 + connectedness * 0.012 + wave(week, def.radiusWave, def.radiusPeriod, phase + 0.5),
-        0.4,
-        3.4,
-      )
-
-  const activityPoint = def.strictDecline
-    ? shiftPoint(def.anchor, week * def.walkLngStep, week * def.walkLatStep)
-    : shiftPoint(
-        def.anchor,
-        wave(week, def.walkLng, def.walkPeriod, phase),
-        wave(week, def.walkLat, def.walkPeriod, phase + 1.1),
-      )
-
-  // rest of function stays the same
-
+  const activityPoint = shiftPoint(
+    def.anchor,
+    wave(week, def.walkLng, def.walkPeriod, phase),
+    wave(week, def.walkLat, def.walkPeriod, phase + 1.1),
+  )
 
   const activePlaces = def.places
     .map((place) => buildPlace(place, week, phase))
@@ -175,41 +184,60 @@ function buildWeek(def, week) {
   }
 }
 
+function getRiskTier(connectedness, socialRadiusKm, activePeopleCount) {
+  if (connectedness <= 45 || socialRadiusKm <= 1 || activePeopleCount <= 1) return 'higher'
+  if (connectedness <= 62 || socialRadiusKm <= 1.45 || activePeopleCount <= 2) return 'moderate'
+  return 'lower'
+}
+
+function getRiskColor(connectedness, socialRadiusKm, activePeopleCount) {
+  const tier = getRiskTier(connectedness, socialRadiusKm, activePeopleCount)
+  if (tier === 'higher') return '#ef4444'
+  if (tier === 'moderate') return '#f59e0b'
+  return '#22c55e'
+}
+
 const studentDefs = [
   {
-  id: 'maya',
-  name: 'Maya Chen',
-  major: 'Journalism',
-  year: 'Junior',
-  bio: 'Begins socially wide, then steadily contracts across the semester until only a very small circle remains.',
-  color: '#9ed0ff',
-  anchor: campus.dormNorth,
-  phase: 0.3,
-  strictDecline: true,
-  mobilityStart: 6.1,
-  mobilityStep: 0.12,
-  distanceStart: 6.0,
-  distanceStep: 0.24,
-  connectednessStart: 88,
-  connectednessStep: 4,
-  radiusStart: 3.0,
-  radiusStep: 0.16,
-  walkLngStep: 0.00035,
-  walkLatStep: 0.00022,
-  places: [
-    { id: 'maya-dorm', name: 'Dorm', point: campus.dormNorth, baseWeight: 1, growth: -0.02, start: 0, end: 15, waveAmp: 0.01, wavePeriod: 4, phase: 0.1, lngJitter: 0.00008, latJitter: 0.00008, lngPeriod: 4, latPeriod: 5 },
-    { id: 'maya-library', name: 'Doheny Library', point: campus.library, baseWeight: 0.82, growth: -0.12, start: 0, end: 11, waveAmp: 0.015, wavePeriod: 5, phase: 0.5, lngJitter: 0.00008, latJitter: 0.00008, lngPeriod: 4, latPeriod: 4 },
-    { id: 'maya-club', name: 'Club room', point: campus.clubRoom, baseWeight: 0.68, growth: -0.2, start: 0, end: 7, waveAmp: 0.01, wavePeriod: 3, phase: 0.8, lngJitter: 0.00006, latJitter: 0.00006, lngPeriod: 4, latPeriod: 5 },
-    { id: 'maya-cafe', name: 'Cafe', point: campus.cafe, baseWeight: 0.5, growth: -0.18, start: 0, end: 6, waveAmp: 0.01, wavePeriod: 4, phase: 0.2, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 3, latPeriod: 4 },
-    { id: 'maya-friend', name: 'Friend apartment', point: campus.friendApt, baseWeight: 0.34, growth: -0.16, start: 0, end: 4, waveAmp: 0.01, wavePeriod: 5, phase: 1.2, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
-  ],
-  people: [
-    { id: 'maya-roommate', name: 'Roommate', point: shiftPoint(campus.dormNorth, 0.0002, 0.0001), baseWeight: 0.94, growth: -0.02, start: 0, end: 15, waveAmp: 0.01, wavePeriod: 4, phase: 0.4, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
-    { id: 'maya-club', name: 'Club friends', point: shiftPoint(campus.clubRoom, 0.0001, -0.00005), baseWeight: 0.8, growth: -0.22, start: 0, end: 7, waveAmp: 0.01, wavePeriod: 3, phase: 0.9, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 3, latPeriod: 4 },
-    { id: 'maya-study', name: 'Study buddy', point: shiftPoint(campus.library, 0.0002, -0.0001), baseWeight: 0.52, growth: -0.1, start: 0, end: 9, waveAmp: 0.01, wavePeriod: 4, phase: 0.6, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 5, latPeriod: 4 },
-    { id: 'maya-new', name: 'New friend', point: shiftPoint(campus.cafe, -0.0001, 0.0001), baseWeight: 0.22, growth: -0.08, start: 0, end: 5, waveAmp: 0.01, wavePeriod: 5, phase: 1.1, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
-  ],
-},
+    id: 'maya',
+    name: 'Maya Chen',
+    major: 'Journalism',
+    year: 'Junior',
+    bio: 'Starts broad and energetic, then narrows during midterms before reopening socially near the end.',
+    color: '#9ed0ff',
+    anchor: campus.dormNorth,
+    phase: 0.3,
+    mobilityBase: 4.7,
+    mobilitySlope: -0.03,
+    mobilityWave: 1.2,
+    mobilityPeriod: 6,
+    distanceBase: 4.5,
+    distanceSlope: -0.05,
+    distanceWave: 1.0,
+    distancePeriod: 7,
+    connectednessBase: 82,
+    connectednessSlope: -1.4,
+    connectednessWave: 6,
+    connectednessPeriod: 5,
+    radiusWave: 0.11,
+    radiusPeriod: 4,
+    walkLng: 0.0012,
+    walkLat: 0.0009,
+    walkPeriod: 5,
+    places: [
+      { id: 'maya-dorm', name: 'Dorm', point: campus.dormNorth, baseWeight: 1, growth: 0, start: 0, end: 15, waveAmp: 0.04, wavePeriod: 4, phase: 0.1, lngJitter: 0.0004, latJitter: 0.0003, lngPeriod: 4, latPeriod: 5 },
+      { id: 'maya-library', name: 'Doheny Library', point: campus.library, baseWeight: 0.86, growth: -0.05, start: 1, end: 15, waveAmp: 0.08, wavePeriod: 6, phase: 0.5, lngJitter: 0.0003, latJitter: 0.0002, lngPeriod: 5, latPeriod: 4 },
+      { id: 'maya-club', name: 'Club room', point: campus.clubRoom, baseWeight: 0.72, growth: -0.12, start: 0, end: 8, waveAmp: 0.09, wavePeriod: 3, phase: 0.8, lngJitter: 0.0003, latJitter: 0.00025, lngPeriod: 4, latPeriod: 5 },
+      { id: 'maya-cafe', name: 'Cafe', point: campus.cafe, baseWeight: 0.53, growth: 0.18, start: 4, end: 15, waveAmp: 0.05, wavePeriod: 4, phase: 0.2, lngJitter: 0.0002, latJitter: 0.0002, lngPeriod: 3, latPeriod: 4 },
+      { id: 'maya-friend', name: 'Friend apartment', point: campus.friendApt, baseWeight: 0.41, growth: 0.12, start: 2, end: 10, waveAmp: 0.07, wavePeriod: 5, phase: 1.2, lngJitter: 0.0002, latJitter: 0.0002, lngPeriod: 4, latPeriod: 4 },
+    ],
+    people: [
+      { id: 'maya-roommate', name: 'Roommate', point: shiftPoint(campus.dormNorth, 0.0004, 0.0002), baseWeight: 0.94, growth: 0.03, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.4, lngJitter: 0.00015, latJitter: 0.0001, lngPeriod: 4, latPeriod: 4 },
+      { id: 'maya-club', name: 'Club friends', point: shiftPoint(campus.clubRoom, 0.0002, -0.0001), baseWeight: 0.83, growth: -0.08, start: 0, end: 8, waveAmp: 0.07, wavePeriod: 3, phase: 0.9, lngJitter: 0.00015, latJitter: 0.00012, lngPeriod: 3, latPeriod: 4 },
+      { id: 'maya-study', name: 'Study buddy', point: shiftPoint(campus.library, 0.0005, -0.0002), baseWeight: 0.56, growth: 0.2, start: 3, end: 11, waveAmp: 0.05, wavePeriod: 4, phase: 0.6, lngJitter: 0.0001, latJitter: 0.00008, lngPeriod: 5, latPeriod: 4 },
+      { id: 'maya-new', name: 'New friend', point: shiftPoint(campus.cafe, -0.0003, 0.0002), baseWeight: 0.34, growth: 0.26, start: 6, end: 15, waveAmp: 0.06, wavePeriod: 5, phase: 1.1, lngJitter: 0.0001, latJitter: 0.0001, lngPeriod: 4, latPeriod: 4 },
+    ],
+  },
   {
     id: 'jordan',
     name: 'Jordan Patel',
@@ -329,8 +357,856 @@ const studentDefs = [
       { id: 'eli-cafe', name: 'Cafe study group', point: shiftPoint(campus.cafe, 0.0001, 0.0001), baseWeight: 0.36, growth: 0.12, start: 6, end: 15, waveAmp: 0.05, wavePeriod: 5, phase: 1.3, lngJitter: 0.00008, latJitter: 0.00008, lngPeriod: 4, latPeriod: 4 },
     ],
   },
+  {
+    id: 'lina',
+    name: 'Lina Romero',
+    major: 'Public Health',
+    year: 'Grad',
+    bio: 'Keeps a steady campus rhythm through wellness, advising, and a small but durable circle.',
+    color: '#22c55e',
+    anchor: campus.wellness,
+    phase: 2.6,
+    mobilityBase: 4.9,
+    mobilitySlope: 0.04,
+    mobilityWave: 0.95,
+    mobilityPeriod: 6,
+    distanceBase: 4.7,
+    distanceSlope: 0.08,
+    distanceWave: 1,
+    distancePeriod: 6,
+    connectednessBase: 71,
+    connectednessSlope: 0.25,
+    connectednessWave: 5,
+    connectednessPeriod: 5,
+    radiusWave: 0.08,
+    radiusPeriod: 4,
+    walkLng: 0.0007,
+    walkLat: 0.0006,
+    walkPeriod: 5,
+    places: [
+      { id: 'lina-wellness', name: 'Wellness center', point: campus.wellness, baseWeight: 0.9, growth: 0.08, start: 0, end: 15, waveAmp: 0.04, wavePeriod: 4, phase: 0.2, lngJitter: 0.00012, latJitter: 0.00012, lngPeriod: 4, latPeriod: 4 },
+      { id: 'lina-library', name: 'Library', point: campus.library, baseWeight: 0.8, growth: 0.05, start: 0, end: 15, waveAmp: 0.05, wavePeriod: 5, phase: 0.8, lngJitter: 0.00012, latJitter: 0.00012, lngPeriod: 4, latPeriod: 4 },
+      { id: 'lina-cafe', name: 'Cafe', point: campus.cafe, baseWeight: 0.48, growth: 0.18, start: 3, end: 15, waveAmp: 0.06, wavePeriod: 4, phase: 1.1, lngJitter: 0.0001, latJitter: 0.0001, lngPeriod: 4, latPeriod: 4 },
+      { id: 'lina-plaza', name: 'Campus plaza', point: campus.plaza, baseWeight: 0.42, growth: 0.14, start: 2, end: 12, waveAmp: 0.05, wavePeriod: 3, phase: 0.5, lngJitter: 0.0001, latJitter: 0.0001, lngPeriod: 4, latPeriod: 4 },
+    ],
+    people: [
+      { id: 'lina-mentor', name: 'Mentor', point: shiftPoint(campus.wellness, 0.0002, 0.0001), baseWeight: 0.85, growth: 0.04, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.3, lngJitter: 0.00006, latJitter: 0.00006, lngPeriod: 4, latPeriod: 4 },
+      { id: 'lina-peer', name: 'Peer cohort', point: shiftPoint(campus.library, -0.0001, 0.0002), baseWeight: 0.74, growth: 0.1, start: 1, end: 15, waveAmp: 0.04, wavePeriod: 4, phase: 1.0, lngJitter: 0.00006, latJitter: 0.00006, lngPeriod: 4, latPeriod: 4 },
+      { id: 'lina-friend', name: 'Weekend friend', point: shiftPoint(campus.cafe, 0.0001, -0.0001), baseWeight: 0.38, growth: 0.22, start: 4, end: 14, waveAmp: 0.06, wavePeriod: 5, phase: 1.2, lngJitter: 0.00006, latJitter: 0.00006, lngPeriod: 4, latPeriod: 4 },
+    ],
+  },
+  {
+    id: 'ken',
+    name: 'Ken Wu',
+    major: 'Computer Science',
+    year: 'PhD',
+    bio: 'A research-heavy routine with fewer but persistent connections and occasional collaborative bursts.',
+    color: '#f59e0b',
+    anchor: campus.engineering,
+    phase: 3.2,
+    mobilityBase: 3.8,
+    mobilitySlope: 0.05,
+    mobilityWave: 0.85,
+    mobilityPeriod: 5,
+    distanceBase: 3.7,
+    distanceSlope: 0.07,
+    distanceWave: 0.95,
+    distancePeriod: 6,
+    connectednessBase: 44,
+    connectednessSlope: 0.15,
+    connectednessWave: 4,
+    connectednessPeriod: 5,
+    radiusWave: 0.07,
+    radiusPeriod: 5,
+    walkLng: 0.0006,
+    walkLat: 0.00045,
+    walkPeriod: 4,
+    places: [
+      { id: 'ken-lab', name: 'Research lab', point: campus.engineering, baseWeight: 0.96, growth: 0.02, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.2, lngJitter: 0.00008, latJitter: 0.00008, lngPeriod: 4, latPeriod: 4 },
+      { id: 'ken-library', name: 'Library', point: campus.library, baseWeight: 0.82, growth: 0.06, start: 0, end: 15, waveAmp: 0.04, wavePeriod: 5, phase: 0.8, lngJitter: 0.00008, latJitter: 0.00008, lngPeriod: 4, latPeriod: 4 },
+      { id: 'ken-cafe', name: 'Cafe', point: campus.cafe, baseWeight: 0.4, growth: 0.12, start: 2, end: 15, waveAmp: 0.06, wavePeriod: 4, phase: 1.1, lngJitter: 0.00006, latJitter: 0.00006, lngPeriod: 4, latPeriod: 4 },
+      { id: 'ken-plaza', name: 'Campus plaza', point: campus.plaza, baseWeight: 0.3, growth: 0.15, start: 5, end: 13, waveAmp: 0.05, wavePeriod: 4, phase: 0.5, lngJitter: 0.00006, latJitter: 0.00006, lngPeriod: 4, latPeriod: 4 },
+    ],
+    people: [
+      { id: 'ken-collab', name: 'Lab collaborator', point: shiftPoint(campus.engineering, 0.00015, 0.0001), baseWeight: 0.89, growth: 0.03, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 4, phase: 0.3, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+      { id: 'ken-advisor', name: 'Advisor', point: shiftPoint(campus.library, -0.0001, 0.0001), baseWeight: 0.7, growth: 0.05, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 5, phase: 0.7, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+      { id: 'ken-friday', name: 'Friday crew', point: shiftPoint(campus.cafe, 0.0001, 0.0001), baseWeight: 0.34, growth: 0.18, start: 4, end: 12, waveAmp: 0.05, wavePeriod: 4, phase: 1.2, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+    ],
+  },
+  {
+
+    id: 'noah',
+
+    name: 'Noah Kim',
+
+    major: 'Economics',
+
+    year: 'Junior',
+
+    bio: 'Quiet routine, mostly library and dorm, with a slow social taper across the semester.',
+
+    color: '#a78bfa',
+
+    anchor: campus.library,
+
+    phase: 0.4,
+
+    mobilityBase: 3.2,
+
+    mobilitySlope: -0.04,
+
+    mobilityWave: 0.6,
+
+    mobilityPeriod: 5,
+
+    distanceBase: 3.0,
+
+    distanceSlope: -0.08,
+
+    distanceWave: 0.7,
+
+    distancePeriod: 6,
+
+    connectednessBase: 52,
+
+    connectednessSlope: -0.9,
+
+    connectednessWave: 2,
+
+    connectednessPeriod: 5,
+
+    radiusWave: 0.05,
+
+    radiusPeriod: 5,
+
+    walkLng: 0.0004,
+
+    walkLat: 0.0003,
+
+    walkPeriod: 5,
+
+    places: [
+
+      { id: 'noah-library', name: 'Library', point: campus.library, baseWeight: 0.96, growth: -0.04, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 5, phase: 0.2, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'noah-dorm', name: 'Dorm', point: campus.dormNorth, baseWeight: 0.88, growth: 0, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.8, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'noah-cafe', name: 'Cafe', point: campus.cafe, baseWeight: 0.44, growth: -0.02, start: 2, end: 10, waveAmp: 0.04, wavePeriod: 4, phase: 1.1, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'noah-engineering', name: 'Engineering building', point: campus.engineering, baseWeight: 0.38, growth: 0.02, start: 4, end: 12, waveAmp: 0.03, wavePeriod: 5, phase: 0.6, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+    people: [
+
+      { id: 'noah-roommate', name: 'Roommate', point: shiftPoint(campus.dormNorth, 0.0001, 0.0001), baseWeight: 0.56, growth: -0.06, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 4, phase: 0.2, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'noah-study', name: 'Study buddy', point: shiftPoint(campus.library, -0.0001, 0.0001), baseWeight: 0.42, growth: -0.04, start: 1, end: 9, waveAmp: 0.03, wavePeriod: 4, phase: 0.5, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'noah-cousin', name: 'Cousin', point: shiftPoint(campus.friendApt, 0.0001, -0.0001), baseWeight: 0.34, growth: 0.01, start: 5, end: 13, waveAmp: 0.03, wavePeriod: 5, phase: 1.2, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+  },
+
+  {
+
+    id: 'ava',
+
+    name: 'Ava Thompson',
+
+    major: 'Biology',
+
+    year: 'Sophomore',
+
+    bio: 'Starts out socially broad, then loses momentum during midterms and never fully rebounds.',
+
+    color: '#34d399',
+
+    anchor: campus.studentCenter,
+
+    phase: 1.2,
+
+    mobilityBase: 6.0,
+
+    mobilitySlope: -0.28,
+
+    mobilityWave: 1.0,
+
+    mobilityPeriod: 5,
+
+    distanceBase: 6.0,
+
+    distanceSlope: -0.3,
+
+    distanceWave: 1.0,
+
+    distancePeriod: 6,
+
+    connectednessBase: 72,
+
+    connectednessSlope: -2.0,
+
+    connectednessWave: 3,
+
+    connectednessPeriod: 5,
+
+    radiusWave: 0.08,
+
+    radiusPeriod: 4,
+
+    walkLng: 0.0010,
+
+    walkLat: 0.0008,
+
+    walkPeriod: 5,
+
+    places: [
+
+      { id: 'ava-center', name: 'Student center', point: campus.studentCenter, baseWeight: 0.98, growth: -0.04, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.2, lngJitter: 0.00006, latJitter: 0.00006, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'ava-dining', name: 'Dining hall', point: campus.dining, baseWeight: 0.88, growth: -0.05, start: 0, end: 12, waveAmp: 0.03, wavePeriod: 4, phase: 0.7, lngJitter: 0.00006, latJitter: 0.00006, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'ava-club', name: 'Club room', point: campus.clubRoom, baseWeight: 0.7, growth: -0.12, start: 0, end: 8, waveAmp: 0.05, wavePeriod: 3, phase: 0.9, lngJitter: 0.00006, latJitter: 0.00006, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'ava-cafe', name: 'Cafe', point: campus.cafe, baseWeight: 0.5, growth: 0.05, start: 3, end: 15, waveAmp: 0.05, wavePeriod: 4, phase: 1.1, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'ava-wellness', name: 'Wellness center', point: campus.wellness, baseWeight: 0.36, growth: 0.08, start: 5, end: 15, waveAmp: 0.04, wavePeriod: 4, phase: 0.4, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+    people: [
+
+      { id: 'ava-roommate', name: 'Roommate', point: shiftPoint(campus.dormNorth, 0.0001, 0.0001), baseWeight: 0.82, growth: -0.02, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 4, phase: 0.2, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'ava-service', name: 'Service friend', point: shiftPoint(campus.clubRoom, -0.0001, 0.0001), baseWeight: 0.58, growth: -0.15, start: 0, end: 9, waveAmp: 0.05, wavePeriod: 4, phase: 0.8, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'ava-lab', name: 'Lab partner', point: shiftPoint(campus.library, 0.0001, -0.0001), baseWeight: 0.5, growth: -0.05, start: 2, end: 11, waveAmp: 0.03, wavePeriod: 4, phase: 1.1, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'ava-new', name: 'New friend', point: shiftPoint(campus.plaza, 0.0001, 0.0001), baseWeight: 0.3, growth: 0.06, start: 6, end: 14, waveAmp: 0.03, wavePeriod: 5, phase: 0.5, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+  },
+
+  {
+
+    id: 'liam',
+
+    name: 'Liam Nguyen',
+
+    major: 'Mathematics',
+
+    year: 'PhD',
+
+    bio: 'Low but stable academic circle centered around the lab and advisor meetings.',
+
+    color: '#60a5fa',
+
+    anchor: campus.engineering,
+
+    phase: 2.5,
+
+    mobilityBase: 2.8,
+
+    mobilitySlope: 0.02,
+
+    mobilityWave: 0.5,
+
+    mobilityPeriod: 6,
+
+    distanceBase: 2.6,
+
+    distanceSlope: 0.04,
+
+    distanceWave: 0.5,
+
+    distancePeriod: 6,
+
+    connectednessBase: 45,
+
+    connectednessSlope: 0.05,
+
+    connectednessWave: 2,
+
+    connectednessPeriod: 6,
+
+    radiusWave: 0.04,
+
+    radiusPeriod: 5,
+
+    walkLng: 0.0003,
+
+    walkLat: 0.0002,
+
+    walkPeriod: 5,
+
+    places: [
+
+      { id: 'liam-lab', name: 'Research lab', point: campus.engineering, baseWeight: 0.98, growth: 0.01, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 4, phase: 0.2, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'liam-library', name: 'Library', point: campus.library, baseWeight: 0.82, growth: 0.02, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 5, phase: 0.6, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'liam-cafe', name: 'Cafe', point: campus.cafe, baseWeight: 0.3, growth: 0.06, start: 4, end: 13, waveAmp: 0.03, wavePeriod: 4, phase: 1.1, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+    people: [
+
+      { id: 'liam-advisor', name: 'Advisor', point: shiftPoint(campus.engineering, 0.0001, 0.0001), baseWeight: 0.6, growth: 0.04, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 4, phase: 0.4, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'liam-peer', name: 'Peer researcher', point: shiftPoint(campus.library, -0.0001, 0.0001), baseWeight: 0.54, growth: 0.02, start: 1, end: 15, waveAmp: 0.02, wavePeriod: 5, phase: 0.8, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+  },
+
+  {
+
+    id: 'zoe',
+
+    name: 'Zoe Park',
+
+    major: 'Design',
+
+    year: 'Senior',
+
+    bio: 'Highly active social life anchored in studio, art spaces, and frequent group meetups.',
+
+    color: '#f472b6',
+
+    anchor: campus.arts,
+
+    phase: 3.1,
+
+    mobilityBase: 7.0,
+
+    mobilitySlope: 0.2,
+
+    mobilityWave: 1.3,
+
+    mobilityPeriod: 5,
+
+    distanceBase: 6.5,
+
+    distanceSlope: 0.2,
+
+    distanceWave: 1.2,
+
+    distancePeriod: 6,
+
+    connectednessBase: 85,
+
+    connectednessSlope: 0.3,
+
+    connectednessWave: 6,
+
+    connectednessPeriod: 5,
+
+    radiusWave: 0.1,
+
+    radiusPeriod: 4,
+
+    walkLng: 0.0012,
+
+    walkLat: 0.001,
+
+    walkPeriod: 5,
+
+    places: [
+
+      { id: 'zoe-arts', name: 'Arts building', point: campus.arts, baseWeight: 0.98, growth: 0.08, start: 0, end: 15, waveAmp: 0.04, wavePeriod: 4, phase: 0.2, lngJitter: 0.00006, latJitter: 0.00006, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'zoe-plaza', name: 'Campus plaza', point: campus.plaza, baseWeight: 0.84, growth: 0.12, start: 0, end: 15, waveAmp: 0.05, wavePeriod: 4, phase: 0.6, lngJitter: 0.00006, latJitter: 0.00006, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'zoe-cafe', name: 'Cafe', point: campus.cafe, baseWeight: 0.76, growth: 0.1, start: 1, end: 15, waveAmp: 0.04, wavePeriod: 4, phase: 1.0, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'zoe-friendapt', name: 'Friend apartment', point: campus.friendApt, baseWeight: 0.52, growth: 0.18, start: 2, end: 14, waveAmp: 0.06, wavePeriod: 5, phase: 1.3, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'zoe-dining', name: 'Dining hall', point: campus.dining, baseWeight: 0.45, growth: 0.12, start: 0, end: 10, waveAmp: 0.03, wavePeriod: 4, phase: 0.4, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+    people: [
+
+      { id: 'zoe-crew', name: 'Creative crew', point: shiftPoint(campus.arts, 0.0001, 0.0001), baseWeight: 0.94, growth: 0.06, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.3, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'zoe-partner', name: 'Studio partner', point: shiftPoint(campus.arts, -0.0001, 0.0001), baseWeight: 0.76, growth: 0.04, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.8, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'zoe-weekend', name: 'Weekend friends', point: shiftPoint(campus.friendApt, 0.0001, -0.0001), baseWeight: 0.58, growth: 0.08, start: 2, end: 15, waveAmp: 0.04, wavePeriod: 5, phase: 1.1, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'zoe-mentor', name: 'Mentor', point: shiftPoint(campus.wellness, 0.0001, 0.0001), baseWeight: 0.4, growth: 0.05, start: 4, end: 12, waveAmp: 0.03, wavePeriod: 4, phase: 0.6, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+  },
+
+  {
+
+    id: 'alex',
+
+    name: 'Alex Rivera',
+
+    major: 'Architecture',
+
+    year: 'Senior',
+
+    bio: 'Moderately social with a strong studio routine and a few recurring outside contacts.',
+
+    color: '#fbbf24',
+
+    anchor: campus.arts,
+
+    phase: 1.7,
+
+    mobilityBase: 5.0,
+
+    mobilitySlope: 0.05,
+
+    mobilityWave: 0.8,
+
+    mobilityPeriod: 5,
+
+    distanceBase: 5.0,
+
+    distanceSlope: 0.1,
+
+    distanceWave: 0.8,
+
+    distancePeriod: 6,
+
+    connectednessBase: 65,
+
+    connectednessSlope: 0.2,
+
+    connectednessWave: 3,
+
+    connectednessPeriod: 5,
+
+    radiusWave: 0.06,
+
+    radiusPeriod: 4,
+
+    walkLng: 0.0008,
+
+    walkLat: 0.0006,
+
+    walkPeriod: 5,
+
+    places: [
+
+      { id: 'alex-arts', name: 'Arts building', point: campus.arts, baseWeight: 0.96, growth: 0.04, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.2, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'alex-library', name: 'Library', point: campus.library, baseWeight: 0.82, growth: 0.03, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.7, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'alex-cafe', name: 'Cafe', point: campus.cafe, baseWeight: 0.48, growth: 0.08, start: 3, end: 15, waveAmp: 0.04, wavePeriod: 4, phase: 1.0, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'alex-plaza', name: 'Campus plaza', point: campus.plaza, baseWeight: 0.42, growth: 0.09, start: 2, end: 14, waveAmp: 0.04, wavePeriod: 4, phase: 1.2, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+    people: [
+
+      { id: 'alex-studio', name: 'Studio group', point: shiftPoint(campus.arts, 0.0001, 0.0001), baseWeight: 0.84, growth: 0.03, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 4, phase: 0.3, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'alex-partner', name: 'Project partner', point: shiftPoint(campus.library, -0.0001, 0.0001), baseWeight: 0.72, growth: 0.05, start: 1, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.8, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'alex-friend', name: 'Weekend friend', point: shiftPoint(campus.friendApt, 0.0001, 0.0001), baseWeight: 0.38, growth: 0.1, start: 4, end: 13, waveAmp: 0.03, wavePeriod: 5, phase: 1.1, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+  },
+
+  {
+
+    id: 'emma',
+
+    name: 'Emma Davis',
+
+    major: 'Psychology',
+
+    year: 'Freshman',
+
+    bio: 'Slowly grows more connected as the semester continues.',
+
+    color: '#22c55e',
+
+    anchor: campus.dormNorth,
+
+    phase: 2.1,
+
+    mobilityBase: 3.0,
+
+    mobilitySlope: 0.2,
+
+    mobilityWave: 0.8,
+
+    mobilityPeriod: 5,
+
+    distanceBase: 3.0,
+
+    distanceSlope: 0.2,
+
+    distanceWave: 0.9,
+
+    distancePeriod: 6,
+
+    connectednessBase: 55,
+
+    connectednessSlope: 0.8,
+
+    connectednessWave: 3,
+
+    connectednessPeriod: 5,
+
+    radiusWave: 0.07,
+
+    radiusPeriod: 4,
+
+    walkLng: 0.0007,
+
+    walkLat: 0.0006,
+
+    walkPeriod: 5,
+
+    places: [
+
+      { id: 'emma-dorm', name: 'Dorm', point: campus.dormNorth, baseWeight: 0.96, growth: 0.03, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.2, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'emma-dining', name: 'Dining hall', point: campus.dining, baseWeight: 0.84, growth: 0.06, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.6, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'emma-club', name: 'Club room', point: campus.clubRoom, baseWeight: 0.42, growth: 0.16, start: 3, end: 15, waveAmp: 0.05, wavePeriod: 4, phase: 1.0, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'emma-plaza', name: 'Campus plaza', point: campus.plaza, baseWeight: 0.36, growth: 0.12, start: 4, end: 15, waveAmp: 0.04, wavePeriod: 4, phase: 1.2, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+    people: [
+
+      { id: 'emma-roommate', name: 'Roommate', point: shiftPoint(campus.dormNorth, 0.0001, 0.0001), baseWeight: 0.7, growth: 0.03, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 4, phase: 0.3, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'emma-club', name: 'Club friends', point: shiftPoint(campus.clubRoom, -0.0001, 0.0001), baseWeight: 0.48, growth: 0.12, start: 2, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.8, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'emma-classmate', name: 'Classmate', point: shiftPoint(campus.library, 0.0001, -0.0001), baseWeight: 0.36, growth: 0.08, start: 4, end: 14, waveAmp: 0.03, wavePeriod: 5, phase: 1.1, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+  },
+
+  {
+
+    id: 'leo',
+
+    name: 'Leo Zhang',
+
+    major: 'Engineering',
+
+    year: 'PhD',
+
+    bio: 'Low interaction but stable routine, mostly lab-focused.',
+
+    color: '#ef4444',
+
+    anchor: campus.engineering,
+
+    phase: 2.9,
+
+    mobilityBase: 3.0,
+
+    mobilitySlope: 0,
+
+    mobilityWave: 0.5,
+
+    mobilityPeriod: 6,
+
+    distanceBase: 3.0,
+
+    distanceSlope: 0,
+
+    distanceWave: 0.5,
+
+    distancePeriod: 6,
+
+    connectednessBase: 42,
+
+    connectednessSlope: 0,
+
+    connectednessWave: 2,
+
+    connectednessPeriod: 6,
+
+    radiusWave: 0.05,
+
+    radiusPeriod: 5,
+
+    walkLng: 0.0003,
+
+    walkLat: 0.0002,
+
+    walkPeriod: 5,
+
+    places: [
+
+      { id: 'leo-lab', name: 'Research lab', point: campus.engineering, baseWeight: 0.98, growth: 0, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 4, phase: 0.2, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'leo-library', name: 'Library', point: campus.library, baseWeight: 0.68, growth: 0.01, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 5, phase: 0.7, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'leo-cafe', name: 'Cafe', point: campus.cafe, baseWeight: 0.28, growth: 0.02, start: 5, end: 13, waveAmp: 0.02, wavePeriod: 4, phase: 1.0, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+    people: [
+
+      { id: 'leo-advisor', name: 'Advisor', point: shiftPoint(campus.engineering, 0.0001, 0.0001), baseWeight: 0.54, growth: 0.03, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 4, phase: 0.4, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'leo-peer', name: 'Lab peer', point: shiftPoint(campus.library, -0.0001, 0.0001), baseWeight: 0.44, growth: 0.02, start: 2, end: 15, waveAmp: 0.02, wavePeriod: 5, phase: 0.8, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+  },
+
+  {
+
+    id: 'olivia',
+
+    name: 'Olivia Chen',
+
+    major: 'Music',
+
+    year: 'Junior',
+
+    bio: 'Maintains a healthy social rhythm through rehearsals, performances, and social spaces.',
+
+    color: '#ec4899',
+
+    anchor: campus.arts,
+
+    phase: 1.9,
+
+    mobilityBase: 5.8,
+
+    mobilitySlope: 0.1,
+
+    mobilityWave: 1.0,
+
+    mobilityPeriod: 5,
+
+    distanceBase: 5.3,
+
+    distanceSlope: 0.12,
+
+    distanceWave: 1.0,
+
+    distancePeriod: 6,
+
+    connectednessBase: 74,
+
+    connectednessSlope: 0.15,
+
+    connectednessWave: 5,
+
+    connectednessPeriod: 5,
+
+    radiusWave: 0.08,
+
+    radiusPeriod: 4,
+
+    walkLng: 0.0009,
+
+    walkLat: 0.0007,
+
+    walkPeriod: 5,
+
+    places: [
+
+      { id: 'olivia-arts', name: 'Arts building', point: campus.arts, baseWeight: 0.96, growth: 0.04, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.2, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'olivia-studentcenter', name: 'Student center', point: campus.studentCenter, baseWeight: 0.7, growth: 0.08, start: 2, end: 15, waveAmp: 0.04, wavePeriod: 4, phase: 0.7, lngJitter: 0.00005, latJitter: 0.00005, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'olivia-cafe', name: 'Cafe', point: campus.cafe, baseWeight: 0.56, growth: 0.1, start: 1, end: 15, waveAmp: 0.04, wavePeriod: 4, phase: 1.0, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'olivia-plaza', name: 'Campus plaza', point: campus.plaza, baseWeight: 0.44, growth: 0.12, start: 2, end: 15, waveAmp: 0.04, wavePeriod: 4, phase: 1.2, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+    people: [
+
+      { id: 'olivia-band', name: 'Band mates', point: shiftPoint(campus.arts, 0.0001, 0.0001), baseWeight: 0.88, growth: 0.04, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.3, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'olivia-roommate', name: 'Roommate', point: shiftPoint(campus.dormNorth, 0.0001, 0.0001), baseWeight: 0.66, growth: 0.03, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 4, phase: 0.8, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'olivia-friend', name: 'Performance friend', point: shiftPoint(campus.plaza, -0.0001, 0.0001), baseWeight: 0.52, growth: 0.06, start: 3, end: 15, waveAmp: 0.03, wavePeriod: 5, phase: 1.1, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+  },
+
+  {
+
+    id: 'grace',
+
+    name: 'Grace Miller',
+
+    major: 'English',
+
+    year: 'Sophomore',
+
+    bio: 'Moderate social life with occasional increases around events and writing groups.',
+
+    color: '#38bdf8',
+
+    anchor: campus.library,
+
+    phase: 2.4,
+
+    mobilityBase: 4.8,
+
+    mobilitySlope: 0.08,
+
+    mobilityWave: 0.85,
+
+    mobilityPeriod: 5,
+
+    distanceBase: 4.7,
+
+    distanceSlope: 0.1,
+
+    distanceWave: 0.8,
+
+    distancePeriod: 6,
+
+    connectednessBase: 66,
+
+    connectednessSlope: 0.2,
+
+    connectednessWave: 3,
+
+    connectednessPeriod: 5,
+
+    radiusWave: 0.07,
+
+    radiusPeriod: 4,
+
+    walkLng: 0.0007,
+
+    walkLat: 0.0006,
+
+    walkPeriod: 5,
+
+    places: [
+
+      { id: 'grace-library', name: 'Library', point: campus.library, baseWeight: 0.94, growth: 0.03, start: 0, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 0.2, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'grace-cafe', name: 'Cafe', point: campus.cafe, baseWeight: 0.5, growth: 0.08, start: 2, end: 15, waveAmp: 0.04, wavePeriod: 4, phase: 0.8, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'grace-plaza', name: 'Campus plaza', point: campus.plaza, baseWeight: 0.46, growth: 0.1, start: 1, end: 15, waveAmp: 0.03, wavePeriod: 4, phase: 1.1, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'grace-arts', name: 'Arts building', point: campus.arts, baseWeight: 0.34, growth: 0.06, start: 4, end: 13, waveAmp: 0.03, wavePeriod: 5, phase: 0.5, lngJitter: 0.00004, latJitter: 0.00004, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+    people: [
+
+      { id: 'grace-writing', name: 'Writing group', point: shiftPoint(campus.library, 0.0001, 0.0001), baseWeight: 0.72, growth: 0.05, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 4, phase: 0.4, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'grace-roommate', name: 'Roommate', point: shiftPoint(campus.dormNorth, 0.0001, 0.0001), baseWeight: 0.56, growth: 0.03, start: 0, end: 15, waveAmp: 0.02, wavePeriod: 4, phase: 0.9, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+      { id: 'grace-friend', name: 'Weekend friend', point: shiftPoint(campus.friendApt, 0.0001, -0.0001), baseWeight: 0.38, growth: 0.06, start: 4, end: 14, waveAmp: 0.03, wavePeriod: 5, phase: 1.2, lngJitter: 0.00003, latJitter: 0.00003, lngPeriod: 4, latPeriod: 4 },
+
+    ],
+
+  }
 ]
 
+export const campusVenues = Array.from(
+  new Map(
+    studentDefs.flatMap((def) =>
+      def.places.map((place) => [
+        slugify(place.name),
+        {
+          id: slugify(place.name),
+          name: place.name,
+          group: getItemGroup(place.name, 'place'),
+          point: place.point,
+        },
+      ]),
+    ),
+  ).values(),
+)
+export const campusZones = [
+  {
+    id: 'housing-north',
+    name: 'North Housing',
+    group: 'housing',
+    coordinates: [
+      [-118.2892, 34.0204],
+      [-118.2849, 34.0204],
+      [-118.2849, 34.0228],
+      [-118.2892, 34.0228],
+      [-118.2892, 34.0204],
+    ],
+  },
+  {
+    id: 'academic-core',
+    name: 'Academic Core',
+    group: 'academic',
+    coordinates: [
+      [-118.2876, 34.0178],
+      [-118.2828, 34.0178],
+      [-118.2828, 34.0211],
+      [-118.2876, 34.0211],
+      [-118.2876, 34.0178],
+    ],
+  },
+  {
+    id: 'social-core',
+    name: 'Social Core',
+    group: 'social',
+    coordinates: [
+      [-118.2819, 34.0194],
+      [-118.2778, 34.0194],
+      [-118.2778, 34.0242],
+      [-118.2819, 34.0242],
+      [-118.2819, 34.0194],
+    ],
+  },
+  {
+    id: 'dining-east',
+    name: 'Dining East',
+    group: 'dining',
+    coordinates: [
+      [-118.2890, 34.0179],
+      [-118.2850, 34.0179],
+      [-118.2850, 34.0197],
+      [-118.2890, 34.0197],
+      [-118.2890, 34.0179],
+    ],
+  },
+  {
+    id: 'wellness-athletics',
+    name: 'Wellness + Athletics',
+    group: 'wellness',
+    coordinates: [
+      [-118.2838, 34.0186],
+      [-118.2799, 34.0186],
+      [-118.2799, 34.0236],
+      [-118.2838, 34.0236],
+      [-118.2838, 34.0186],
+    ],
+  },
+  {
+    id: 'clubs-west',
+    name: 'Clubs West',
+    group: 'clubs',
+    coordinates: [
+      [-118.2810, 34.0214],
+      [-118.2783, 34.0214],
+      [-118.2783, 34.0248],
+      [-118.2810, 34.0248],
+      [-118.2810, 34.0214],
+    ],
+  },
+]
 function buildStudentTimeline(def) {
   return Array.from({ length: WEEK_COUNT }, (_, week) => buildWeek(def, week))
 }
@@ -354,16 +1230,33 @@ export function getStudentById(studentId) {
   return students.find((student) => student.id === studentId) || students[0]
 }
 
-export function getWeekData(studentId, weekIndex) {
+export function getWeekData(studentId, weekIndex, options = {}) {
   const student = getStudentById(studentId)
-  return student.weeks[clamp(weekIndex, 0, WEEK_COUNT - 1)]
+  const week = student.weeks[clamp(weekIndex, 0, WEEK_COUNT - 1)]
+  const groupFilter = options.groupFilter || 'all'
+
+  if (groupFilter === 'all') return week
+
+  const activePlaces = week.activePlaces.filter((item) => item.group === groupFilter)
+  const activePeople = week.activePeople.filter((item) => item.group === groupFilter)
+  const placeVisits = activePlaces.reduce((sum, place) => sum + Math.round(place.weight * 4), 0)
+
+  return {
+    ...week,
+    activePlaces,
+    activePeople,
+    placeVisits,
+  }
 }
 
-export function getStudentMarkers(weekIndex, selectedStudentId = null) {
+export function getStudentMarkers(weekIndex, selectedStudentId = null, cohortFilter = 'all') {
   const week = clamp(weekIndex, 0, WEEK_COUNT - 1)
 
-  return students.map((student) => {
+  return students.filter((student) => cohortFilter === 'all' || student.year === cohortFilter).map((student) => {
     const data = student.weeks[week]
+    const riskColor = getRiskColor(data.connectedness, data.socialRadiusKm, data.activePeople.length)
+    const riskTier = getRiskTier(data.connectedness, data.socialRadiusKm, data.activePeople.length)
+
     return {
       id: student.id,
       name: student.name,
@@ -371,6 +1264,8 @@ export function getStudentMarkers(weekIndex, selectedStudentId = null) {
       year: student.year,
       bio: student.bio,
       color: student.color,
+      riskColor,
+      riskTier,
       selected: student.id === selectedStudentId,
       distanceKm: data.distanceKm,
       connectedness: data.connectedness,
@@ -385,4 +1280,4 @@ export function getStudentMarkers(weekIndex, selectedStudentId = null) {
   })
 }
 
-export { timelineWeeks }
+export { timelineWeeks, getRiskColor, getRiskTier }

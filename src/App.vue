@@ -5,8 +5,8 @@
         <p class="eyebrow">USC semester visualization</p>
         <h1>Social circle over time</h1>
         <p class="intro">
-          This version uses synthetic Strava/Fitbit-style data: weekly distance moved, places visited,
-          and inferred contacts. The social circle can shrink, hold steady, or expand depending on the student.
+          This dashboard uses synthetic Strava/Fitbit-style data: weekly distance moved, places visited,
+          contacts, and a social radius that can shrink, stabilize, or grow depending on the student.
         </p>
       </div>
 
@@ -14,36 +14,89 @@
         <div class="hero-stat">
           <span class="label">Selected</span>
           <strong>{{ selectedStudent.name }}</strong>
+          <small>{{ selectedStudent.year }} · {{ selectedStudent.major }}</small>
         </div>
         <div class="hero-stat">
-          <span class="label">Weekly distance</span>
-          <strong>{{ weekData.distanceKm.toFixed(1) }} km</strong>
+          <span class="label">Visible students</span>
+          <strong>{{ visibleStudents.length }}</strong>
+          <small>{{ cohortLabel }}</small>
         </div>
         <div class="hero-stat">
           <span class="label">Connectedness</span>
           <strong>{{ weekData.connectedness }}/100</strong>
+          <small>{{ groupLabel }}</small>
         </div>
       </div>
     </header>
 
+    <section class="filters panel">
+      <div class="filter-block">
+        <label for="cohort-filter">Class / cohort</label>
+        <select id="cohort-filter" v-model="cohortFilter">
+          <option v-for="option in cohortOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </div>
+
+      <div class="filter-block">
+        <label for="group-filter">Social group</label>
+        <select id="group-filter" v-model="groupFilter">
+          <option v-for="option in groupOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </div>
+
+      <div class="filter-block">
+        <label>Map mode</label>
+        <div class="mode-toggle" role="tablist" aria-label="Map mode">
+          <button
+            type="button"
+            class="mode-btn"
+            :class="{ active: mapMode === 'students' }"
+            @click="mapMode = 'students'"
+          >
+            Students
+          </button>
+          <button
+            type="button"
+            class="mode-btn"
+            :class="{ active: mapMode === 'choropleth' }"
+            @click="mapMode = 'choropleth'"
+          >
+            Choropleth
+          </button>
+        </div>
+      </div>
+
+      <div class="filter-note">
+        Showing {{ visibleStudents.length }} students and filtering the selected student's map by {{ groupLabel.toLowerCase() }}.
+        In choropleth mode, campus zones are shaded by the current cohort’s average connectedness and visit density.
+      </div>
+    </section>
+
     <main class="layout">
       <MapView
+        :mode="mapMode"
         :week="week"
         :week-data="weekData"
+        :full-week-data="fullWeekData"
         :student-markers="studentMarkers"
+        :choropleth-zones="choroplethZones"
         :token="mapboxToken"
         @select-student="selectedStudentId = $event"
       />
+        <TimeSlider v-model:week="week" :max-weeks="WEEK_COUNT" :label="currentLabel" />
 
       <aside class="side">
         <StudentRoster
-          :students="students"
+          :students="visibleStudentsWithRisk"
           :selected-student-id="selectedStudentId"
           :week="week"
           @select-student="selectedStudentId = $event"
         />
 
-        <TimeSlider v-model:week="week" :max-weeks="WEEK_COUNT" :label="currentLabel" />
 
         <SocialStats
           :student-name="selectedStudent.name"
@@ -72,22 +125,118 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import MapView from './components/MapView.vue'
 import TimeSlider from './components/TimeSlider.vue'
 import SocialStats from './components/SocialStats.vue'
 import TrendChart from './components/TrendChart.vue'
 import StudentRoster from './components/StudentRoster.vue'
-import { WEEK_COUNT, getStudentById, getStudentMarkers, students, timelineWeeks, getWeekData } from './data/uscSemester.js'
+import {
+  WEEK_COUNT,
+  campusZones,
+  getStudentById,
+  getStudentMarkers,
+  students,
+  timelineWeeks,
+  getWeekData,
+  getRiskColor,
+} from './data/uscSemester.js'
+
+const cohortOptions = [
+  { value: 'all', label: 'All classes' },
+  { value: 'Freshman', label: 'Freshman' },
+  { value: 'Sophomore', label: 'Sophomore' },
+  { value: 'Junior', label: 'Junior' },
+  { value: 'Senior', label: 'Senior' },
+  { value: 'Grad', label: 'Grad' },
+  { value: 'PhD', label: 'PhD' },
+]
+
+const groupOptions = [
+  { value: 'all', label: 'All groups' },
+  { value: 'academic', label: 'Academic' },
+  { value: 'housing', label: 'Housing' },
+  { value: 'social', label: 'Social' },
+  { value: 'clubs', label: 'Clubs' },
+  { value: 'dining', label: 'Dining' },
+  { value: 'wellness', label: 'Wellness' },
+  { value: 'athletics', label: 'Athletics' },
+]
 
 const week = ref(0)
+const cohortFilter = ref('all')
+const groupFilter = ref('all')
+const mapMode = ref('students')
 const selectedStudentId = ref(students[0].id)
 const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN || ''
 
+const visibleStudents = computed(() => {
+  const filtered = cohortFilter.value === 'all'
+    ? students
+    : students.filter((student) => student.year === cohortFilter.value)
+
+  return filtered.length > 0 ? filtered : students
+})
+
+const visibleStudentsWithRisk = computed(() =>
+  visibleStudents.value.map((student) => {
+    const snapshot = student.weeks[week.value]
+    return {
+      ...student,
+      riskColor: getRiskColor(snapshot.connectedness, snapshot.socialRadiusKm, snapshot.activePeople.length),
+    }
+  }),
+)
+
 const selectedStudent = computed(() => getStudentById(selectedStudentId.value))
-const weekData = computed(() => getWeekData(selectedStudentId.value, week.value))
+const fullWeekData = computed(() => getWeekData(selectedStudentId.value, week.value))
+const weekData = computed(() => getWeekData(selectedStudentId.value, week.value, { groupFilter: groupFilter.value }))
 const currentLabel = computed(() => timelineWeeks[week.value].label)
-const studentMarkers = computed(() => getStudentMarkers(week.value, selectedStudentId.value))
+const studentMarkers = computed(() => getStudentMarkers(week.value, selectedStudentId.value, cohortFilter.value))
+const cohortLabel = computed(() => cohortOptions.find((option) => option.value === cohortFilter.value)?.label || 'All classes')
+const groupLabel = computed(() => groupOptions.find((option) => option.value === groupFilter.value)?.label || 'All groups')
+
+const choroplethZones = computed(() => {
+  const cohortStudents = visibleStudents.value
+  const selectedWeek = week.value
+
+  return campusZones.map((zone) => {
+    let totalVisits = 0
+    let connectednessTotal = 0
+    let matchedStudents = 0
+
+    cohortStudents.forEach((student) => {
+      const snapshot = student.weeks[selectedWeek]
+      const matchingPlaces = snapshot.activePlaces.filter((place) => place.group === zone.group)
+      if (matchingPlaces.length === 0) return
+
+      matchedStudents += 1
+      totalVisits += matchingPlaces.reduce((sum, place) => sum + Math.max(1, Math.round(place.weight * 3)), 0)
+      connectednessTotal += snapshot.connectedness
+    })
+
+    const averageConnectedness = matchedStudents ? connectednessTotal / matchedStudents : 0
+    const visitScore = Math.min(100, totalVisits * 16)
+    const score = Math.round(averageConnectedness * 0.65 + visitScore * 0.35)
+
+    return {
+      ...zone,
+      score,
+      visits: totalVisits,
+      students: matchedStudents,
+    }
+  })
+})
+
+watch(
+  visibleStudents,
+  (studentsList) => {
+    if (!studentsList.some((student) => student.id === selectedStudentId.value)) {
+      selectedStudentId.value = studentsList[0]?.id || students[0].id
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <style scoped>
@@ -101,7 +250,7 @@ const studentMarkers = computed(() => getStudentMarkers(week.value, selectedStud
   justify-content: space-between;
   gap: 24px;
   align-items: flex-start;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
 
 h1 {
@@ -134,18 +283,78 @@ h1 {
   padding: 12px;
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.03);
-}
-
-.label {
-  display: block;
-  font-size: 12px;
-  color: #9aa9c3;
-  margin-bottom: 6px;
+  display: grid;
+  gap: 6px;
 }
 
 .hero-stat strong {
   font-size: 20px;
   line-height: 1.25;
+}
+
+.hero-stat small {
+  color: #9aa9c3;
+  line-height: 1.35;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  align-items: end;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+
+.filter-block {
+  display: grid;
+  gap: 8px;
+}
+
+.filter-block label {
+  color: #cfe0fb;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.filter-block select {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e5eefb;
+  padding: 12px 14px;
+  outline: none;
+}
+
+.mode-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mode-btn {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: #d8e7fb;
+  border-radius: 14px;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+
+.mode-btn.active {
+  border-color: rgba(158, 208, 255, 0.7);
+  background: rgba(158, 208, 255, 0.14);
+}
+
+.filter-note {
+  color: #9aa9c3;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px dashed rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .layout {
@@ -155,6 +364,11 @@ h1 {
   align-items: start;
 }
 
+.map-column {
+  display: grid;
+  gap: 14px;
+}
+
 .side {
   display: grid;
   gap: 16px;
@@ -162,7 +376,8 @@ h1 {
 
 @media (max-width: 1080px) {
   .hero,
-  .layout {
+  .layout,
+  .filters {
     grid-template-columns: 1fr;
     display: grid;
   }
