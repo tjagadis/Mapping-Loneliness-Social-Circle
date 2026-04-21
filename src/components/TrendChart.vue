@@ -154,7 +154,17 @@ function radiusY(value) {
   stroke-width: 1;
   stroke-dasharray: 4 5;
 }
+.line.mobility {
+  background: #9ed0ff;
+}
 
+.line.connection {
+  background: #86efac;
+}
+
+.line.radius {
+  background: #fbbf24;
+}
 .active-dot {
   stroke: #08101d;
   stroke-width: 2;
