@@ -3,14 +3,9 @@
     <div class="section-header">
       <div>
         <p class="eyebrow">Mapbox</p>
-        <h2>{{ mode === 'choropleth' ? 'USC campus choropleth' : 'USC campus social circle' }}</h2>
+        <h2>{{ title }}</h2>
         <p class="muted">
-          <span v-if="mode === 'choropleth'">
-            Campus zones are shaded by the current cohort’s average connectedness and visit density.
-          </span>
-          <span v-else>
-            Student paths and social circles update by week. Campus venues stay on the map and light up when visited.
-          </span>
+          {{ subtitle }}
         </p>
       </div>
       <div class="metric">Week {{ week + 1 }}</div>
@@ -29,8 +24,11 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import mapboxgl from 'mapbox-gl'
 import { campusVenues } from '../data/uscSemester.js'
 
+const ZOOM_CHORO_MAX = 13.85
+const ZOOM_POINTS_MIN = 13.85
+const ZOOM_NETWORK_MIN = 15.8
+
 const props = defineProps({
-  mode: { type: String, required: true },
   week: { type: Number, required: true },
   weekData: { type: Object, required: true },
   fullWeekData: { type: Object, required: true },
@@ -43,6 +41,7 @@ const emit = defineEmits(['select-student'])
 
 const mapEl = ref(null)
 const errorMessage = ref('')
+const currentZoom = ref(13.35)
 let map = null
 let popup = null
 
@@ -86,9 +85,10 @@ function featureCollection(features) {
   }
 }
 
+const selectedMarker = computed(() => props.studentMarkers.find((marker) => marker.selected) || props.studentMarkers[0])
+
 const selectedCircle = computed(() => {
   const { activityPoint, socialRadiusKm, activePlaces, activePeople, connectedness } = props.weekData
-  const selectedStudent = props.studentMarkers.find((marker) => marker.selected)
   const riskTier = connectedness <= 45 ? 'higher' : connectedness <= 62 ? 'moderate' : 'lower'
 
   const features = [
@@ -104,9 +104,9 @@ const selectedCircle = computed(() => {
       type: 'Feature',
       properties: {
         kind: 'student',
-        name: selectedStudent?.name || 'Selected student',
-        major: selectedStudent?.major || '',
-        year: selectedStudent?.year || '',
+        name: selectedMarker.value?.name || 'Selected student',
+        major: selectedMarker.value?.major || '',
+        year: selectedMarker.value?.year || '',
         connectedness,
         activePlaces: activePlaces.length,
         activePeople: activePeople.length,
@@ -114,26 +114,54 @@ const selectedCircle = computed(() => {
       },
       geometry: { type: 'Point', coordinates: activityPoint },
     },
-    ...activePlaces.map((place) => ({
-      type: 'Feature',
-      properties: {
-        kind: 'place',
-        name: place.name,
-        group: place.group,
-        weight: place.weight,
+    ...activePlaces.flatMap((place) => ([
+      {
+        type: 'Feature',
+        properties: {
+          kind: 'link',
+          linkType: 'place',
+          name: place.name,
+        },
+        geometry: {
+          type: 'LineString',
+          coordinates: [activityPoint, place.point],
+        },
       },
-      geometry: { type: 'Point', coordinates: place.point },
-    })),
-    ...activePeople.map((person) => ({
-      type: 'Feature',
-      properties: {
-        kind: 'person',
-        name: person.name,
-        group: person.group,
-        weight: person.weight,
+      {
+        type: 'Feature',
+        properties: {
+          kind: 'place',
+          name: place.name,
+          group: place.group,
+          weight: place.weight,
+        },
+        geometry: { type: 'Point', coordinates: place.point },
       },
-      geometry: { type: 'Point', coordinates: person.point },
-    })),
+    ])),
+    ...activePeople.flatMap((person) => ([
+      {
+        type: 'Feature',
+        properties: {
+          kind: 'link',
+          linkType: 'person',
+          name: person.name,
+        },
+        geometry: {
+          type: 'LineString',
+          coordinates: [activityPoint, person.point],
+        },
+      },
+      {
+        type: 'Feature',
+        properties: {
+          kind: 'person',
+          name: person.name,
+          group: person.group,
+          weight: person.weight,
+        },
+        geometry: { type: 'Point', coordinates: person.point },
+      },
+    ])),
   ]
 
   return featureCollection(features)
@@ -201,6 +229,28 @@ const zoneGeoJSON = computed(() =>
     })),
   ),
 )
+
+const stage = computed(() => {
+  if (currentZoom.value < ZOOM_CHORO_MAX) return 'choropleth'
+  if (currentZoom.value < ZOOM_NETWORK_MIN) return 'dots'
+  return 'network'
+})
+
+const title = computed(() => {
+  if (stage.value === 'choropleth') return 'USC campus choropleth'
+  if (stage.value === 'dots') return 'USC campus dot plot'
+  return 'USC campus social network'
+})
+
+const subtitle = computed(() => {
+  if (stage.value === 'choropleth') {
+    return 'Zoom in to reveal student points and venue activity.'
+  }
+  if (stage.value === 'dots') {
+    return 'Student points and venues are visible. Zoom further to reveal the selected student’s network.'
+  }
+  return 'The selected student’s places, people, and social radius are revealed at close range.'
+})
 
 function popupContent(feature) {
   const kind = feature?.properties?.kind
@@ -272,23 +322,32 @@ function syncSources() {
   if (zonesSource) zonesSource.setData(zoneGeoJSON.value)
 }
 
-function syncMode() {
-  if (!map) return
-  const choropleth = props.mode === 'choropleth'
-  const show = (layerId) => {
-    if (map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', 'visible')
-  }
-  const hide = (layerId) => {
-    if (map.getLayer('selected-student')) map.setLayoutProperty('selected-student', 'visibility', 'none')
-    if (map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', 'none')
-  }
+function setVisibility(layerId, visible) {
+  if (!map?.getLayer(layerId)) return
+  map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none')
+}
 
-  ;['zone-fill', 'zone-outline', 'zone-labels'].forEach(choropleth ? show : hide)
-  ;['radius-fill', 'place-points', 'person-points', 'venue-base', 'venues-visited', 'venue-labels', 'student-labels', 'students-other'].forEach(choropleth ? hide : show)
-  // Keep selected student hidden/showed in lockstep with the student layers.
-  if (map.getLayer('students-selected')) {
-    map.setLayoutProperty('students-selected', 'visibility', choropleth ? 'none' : 'visible')
-  }
+function syncVisibility() {
+  if (!map) return
+  const isChoro = currentZoom.value < ZOOM_CHORO_MAX
+  const isDots = currentZoom.value >= ZOOM_POINTS_MIN
+  const isNetwork = currentZoom.value >= ZOOM_NETWORK_MIN
+
+  setVisibility('zone-fill', isChoro)
+  setVisibility('zone-outline', isChoro)
+  setVisibility('zone-labels', isChoro)
+
+  setVisibility('student-points', isDots)
+  setVisibility('student-labels', isDots)
+  setVisibility('venue-base', isDots)
+  setVisibility('venues-visited', isDots)
+  setVisibility('venue-labels', isDots)
+
+  setVisibility('social-radius', isNetwork)
+  setVisibility('selected-place-points', isNetwork)
+  setVisibility('selected-person-points', isNetwork)
+  setVisibility('selected-student-center', isNetwork)
+  setVisibility('selected-links', isNetwork)
 }
 
 onMounted(() => {
@@ -304,7 +363,7 @@ onMounted(() => {
       container: mapEl.value,
       style: 'mapbox://styles/mapbox/dark-v11',
       center: [-118.2851, 34.0206],
-      zoom: 15.2,
+      zoom: 13.35,
       pitch: 32,
       bearing: -12,
       attributionControl: false,
@@ -320,7 +379,19 @@ onMounted(() => {
       }
     })
 
+    map.on('zoom', () => {
+      currentZoom.value = map.getZoom()
+      syncVisibility()
+    })
+
+    map.on('moveend', () => {
+      currentZoom.value = map.getZoom()
+      syncVisibility()
+    })
+
     map.on('load', () => {
+      currentZoom.value = map.getZoom()
+
       map.addSource('social', { type: 'geojson', data: selectedCircle.value })
       map.addSource('students', { type: 'geojson', data: studentMarkersGeoJSON.value })
       map.addSource('venues', { type: 'geojson', data: venueMarkersGeoJSON.value })
@@ -374,55 +445,32 @@ onMounted(() => {
       })
 
       map.addLayer({
-        id: 'radius-fill',
-        type: 'fill',
-        source: 'social',
-        filter: ['==', ['get', 'kind'], 'radius'],
-        paint: {
-          'fill-color': '#7dd3fc',
-          'fill-opacity': 0.12,
-        },
-      })
-
-      map.addLayer({
-        id: 'place-points',
+        id: 'student-points',
         type: 'circle',
-        source: 'social',
-        filter: ['==', ['get', 'kind'], 'place'],
+        source: 'students',
         paint: {
-          'circle-color': '#c4b5fd',
-          'circle-radius': ['interpolate', ['linear'], ['get', 'weight'], 0.2, 5, 1, 16],
+          'circle-color': ['get', 'riskColor'],
+          'circle-radius': ['interpolate', ['linear'], ['get', 'connectedness'], 0, 8, 100, 13],
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#0b1220',
           'circle-opacity': 0.92,
         },
       })
 
       map.addLayer({
-        id: 'person-points',
-        type: 'circle',
-        source: 'social',
-        filter: ['==', ['get', 'kind'], 'person'],
-        paint: {
-          'circle-color': '#86efac',
-          'circle-radius': ['interpolate', ['linear'], ['get', 'weight'], 0.2, 6, 1, 16],
-          'circle-opacity': 0.95,
+        id: 'student-labels',
+        type: 'symbol',
+        source: 'students',
+        layout: {
+          'text-field': ['get', 'name'],
+          'text-size': 12,
+          'text-offset': [0, 1.2],
+          'text-anchor': 'top',
         },
-      })
-
-      map.addLayer({
-        id: 'selected-student',
-        type: 'circle',
-        source: 'social',
-        filter: ['==', ['get', 'kind'], 'student'],
         paint: {
-          'circle-color': [
-            'case',
-            ['==', ['get', 'riskTier'], 'higher'], '#ef4444',
-            ['==', ['get', 'riskTier'], 'moderate'], '#f59e0b',
-            '#22c55e',
-          ],
-          'circle-radius': ['interpolate', ['linear'], ['get', 'connectedness'], 0, 10, 100, 18],
-          'circle-stroke-width': 3,
-          'circle-stroke-color': '#eef6ff',
+          'text-color': '#ecf6ff',
+          'text-halo-color': '#08101d',
+          'text-halo-width': 1.2,
         },
       })
 
@@ -486,58 +534,78 @@ onMounted(() => {
       })
 
       map.addLayer({
-        id: 'students-other',
+        id: 'selected-student-center',
         type: 'circle',
-        source: 'students',
-        filter: ['==', ['get', 'selected'], false],
+        source: 'social',
+        filter: ['==', ['get', 'kind'], 'student'],
         paint: {
-          'circle-color': ['get', 'riskColor'],
-          'circle-radius': ['interpolate', ['linear'], ['get', 'connectedness'], 0, 8, 100, 13],
-          'circle-stroke-width': 2,
-          'circle-stroke-color': '#0b1220',
+          'circle-color': [
+            'case',
+            ['==', ['get', 'riskTier'], 'higher'], '#ef4444',
+            ['==', ['get', 'riskTier'], 'moderate'], '#f59e0b',
+            '#22c55e',
+          ],
+          'circle-radius': ['interpolate', ['linear'], ['get', 'connectedness'], 0, 12, 100, 18],
+          'circle-stroke-width': 4,
+          'circle-stroke-color': '#f8fafc',
+        },
+      })
+
+      map.addLayer({
+        id: 'selected-links',
+        type: 'line',
+        source: 'social',
+        filter: ['==', ['get', 'kind'], 'link'],
+        paint: {
+          'line-color': '#9ed0ff',
+          'line-width': 2.2,
+          'line-opacity': 0.85,
+        },
+      })
+
+      map.addLayer({
+        id: 'social-radius',
+        type: 'fill',
+        source: 'social',
+        filter: ['==', ['get', 'kind'], 'radius'],
+        paint: {
+          'fill-color': '#7dd3fc',
+          'fill-opacity': 0.12,
+        },
+      })
+
+      map.addLayer({
+        id: 'selected-place-points',
+        type: 'circle',
+        source: 'social',
+        filter: ['==', ['get', 'kind'], 'place'],
+        paint: {
+          'circle-color': '#c4b5fd',
+          'circle-radius': ['interpolate', ['linear'], ['get', 'weight'], 0.2, 5, 1, 16],
           'circle-opacity': 0.92,
         },
       })
 
       map.addLayer({
-        id: 'students-selected',
+        id: 'selected-person-points',
         type: 'circle',
-        source: 'students',
-        filter: ['==', ['get', 'selected'], true],
+        source: 'social',
+        filter: ['==', ['get', 'kind'], 'person'],
         paint: {
-          'circle-color': ['get', 'riskColor'],
-          'circle-radius': ['interpolate', ['linear'], ['get', 'connectedness'], 0, 12, 100, 18],
-          'circle-stroke-width': 4,
-          'circle-stroke-color': '#f8fafc',
-          'circle-opacity': 1,
-        },
-      })
-
-      map.addLayer({
-        id: 'student-labels',
-        type: 'symbol',
-        source: 'students',
-        layout: {
-          'text-field': ['get', 'name'],
-          'text-size': 12,
-          'text-offset': [0, 1.2],
-          'text-anchor': 'top',
-        },
-        paint: {
-          'text-color': '#ecf6ff',
-          'text-halo-color': '#08101d',
-          'text-halo-width': 1.2,
+          'circle-color': '#86efac',
+          'circle-radius': ['interpolate', ['linear'], ['get', 'weight'], 0.2, 6, 1, 16],
+          'circle-opacity': 0.95,
         },
       })
 
       const hoverLayers = [
         'zone-fill',
-        'students-other',
-        'students-selected',
+        'student-points',
+        'selected-student-center',
         'venue-base',
         'venues-visited',
-        'place-points',
-        'person-points',
+        'selected-place-points',
+        'selected-person-points',
       ]
 
       hoverLayers.forEach((layerId) => {
@@ -550,17 +618,16 @@ onMounted(() => {
         })
       })
 
-      map.on('click', 'students-other', (event) => {
+      map.on('click', 'student-points', (event) => {
         const feature = event.features?.[0]
         if (!feature) return
         emit('select-student', feature.properties.id)
         setPopup(feature, feature.geometry.coordinates)
       })
 
-      map.on('click', 'students-selected', (event) => {
+      map.on('click', 'selected-student-center', (event) => {
         const feature = event.features?.[0]
         if (!feature) return
-        emit('select-student', feature.properties.id)
         setPopup(feature, feature.geometry.coordinates)
       })
 
@@ -576,13 +643,13 @@ onMounted(() => {
         setPopup(feature, feature.geometry.coordinates)
       })
 
-      map.on('click', 'place-points', (event) => {
+      map.on('click', 'selected-place-points', (event) => {
         const feature = event.features?.[0]
         if (!feature) return
         setPopup(feature, feature.geometry.coordinates)
       })
 
-      map.on('click', 'person-points', (event) => {
+      map.on('click', 'selected-person-points', (event) => {
         const feature = event.features?.[0]
         if (!feature) return
         setPopup(feature, feature.geometry.coordinates)
@@ -595,7 +662,7 @@ onMounted(() => {
       })
 
       syncSources()
-      syncMode()
+      syncVisibility()
     })
   } catch (error) {
     errorMessage.value = error?.message || 'Unexpected Mapbox initialization error.'
@@ -608,7 +675,7 @@ watch(
   { deep: true },
 )
 
-watch(() => props.mode, syncMode)
+watch(() => currentZoom.value, syncVisibility)
 
 onBeforeUnmount(() => {
   if (popup) popup.remove()
@@ -638,24 +705,22 @@ onBeforeUnmount(() => {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.06);
   color: #d8e7fb;
-  font-size: 13px;
-  white-space: nowrap;
 }
 
 .map {
   width: 100%;
   min-height: 560px;
-  border-radius: 20px;
+  border-radius: 18px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.04);
 }
 
 .map-error {
-  min-height: 220px;
+  min-height: 180px;
   display: grid;
   place-items: center;
   padding: 20px;
-  border-radius: 20px;
+  border-radius: 16px;
   border: 1px solid rgba(248, 113, 113, 0.35);
   background: rgba(127, 29, 29, 0.25);
   color: #fecaca;

@@ -53,6 +53,9 @@ defineEmits(['select-student'])
 .roster-list {
   display: grid;
   gap: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .roster-item {

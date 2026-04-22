@@ -48,52 +48,37 @@
         </select>
       </div>
 
-      <div class="filter-block">
-        <label>Map mode</label>
-        <div class="mode-toggle" role="tablist" aria-label="Map mode">
-          <button
-            type="button"
-            class="mode-btn"
-            :class="{ active: mapMode === 'students' }"
-            @click="mapMode = 'students'"
-          >
-            Students
-          </button>
-          <button
-            type="button"
-            class="mode-btn"
-            :class="{ active: mapMode === 'choropleth' }"
-            @click="mapMode = 'choropleth'"
-          >
-            Choropleth
-          </button>
-        </div>
-      </div>
-
       <div class="filter-note">
-        Showing {{ visibleStudents.length }} students and filtering the selected student's map by {{ groupLabel.toLowerCase() }}.
-        In choropleth mode, campus zones are shaded by the current cohort’s average connectedness and visit density.
+        Showing {{ visibleStudents.length }} students. The map opens as a campus choropleth,
+        then becomes a dot plot as you zoom in.
       </div>
     </section>
 
     <main class="layout">
-      <MapView
-        :mode="mapMode"
-        :week="week"
-        :week-data="weekData"
-        :full-week-data="fullWeekData"
-        :student-markers="studentMarkers"
-        :choropleth-zones="choroplethZones"
-        :token="mapboxToken"
-        @select-student="selectedStudentId = $event"
-      />
-<TrendChart
-          :student-name="selectedStudent.name"
-          :values="selectedStudent.weeks.map((item) => item.distanceKm)"
-          :connectedness-series="selectedStudent.weeks.map((item) => item.connectedness)"
-          :radius-series="selectedStudent.weeks.map((item) => item.socialRadiusKm)"
-          :active-week="week"
+      <section class="map-column">
+        <MapView
+          :week="week"
+          :week-data="weekData"
+          :full-week-data="fullWeekData"
+          :student-markers="studentMarkers"
+          :choropleth-zones="choroplethZones"
+          :token="mapboxToken"
+          @select-student="selectedStudentId = $event"
         />
+
+        <TimeSlider v-model:week="week" :max-weeks="WEEK_COUNT" :label="currentLabel" />
+      </section>
+
+      <aside class="side">
+        <div class="roster-scroll">
+          <StudentRoster
+            :students="visibleStudentsWithRisk"
+            :selected-student-id="selectedStudentId"
+            :week="week"
+            @select-student="selectedStudentId = $event"
+          />
+        </div>
+
         <SocialStats
           :student-name="selectedStudent.name"
           :major="selectedStudent.major"
@@ -107,22 +92,14 @@
           :active-places="weekData.activePlaces.length"
           :social-radius-km="weekData.socialRadiusKm"
         />
-      <aside class="side">
-              <TimeSlider v-model:week="week" :max-weeks="WEEK_COUNT" :label="currentLabel" />
 
-        <div class="roster-scroll">
-  <StudentRoster
-    :students="visibleStudentsWithRisk"
-    :selected-student-id="selectedStudentId"
-    :week="week"
-    @select-student="selectedStudentId = $event"
-  />
-</div>
-
-
-        
-
-        
+        <TrendChart
+          :student-name="selectedStudent.name"
+          :values="selectedStudent.weeks.map((item) => item.distanceKm)"
+          :connectedness-series="selectedStudent.weeks.map((item) => item.connectedness)"
+          :radius-series="selectedStudent.weeks.map((item) => item.socialRadiusKm)"
+          :active-week="week"
+        />
       </aside>
     </main>
   </div>
@@ -170,7 +147,6 @@ const groupOptions = [
 const week = ref(0)
 const cohortFilter = ref('all')
 const groupFilter = ref('all')
-const mapMode = ref('students')
 const selectedStudentId = ref(students[0].id)
 const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN || ''
 
@@ -257,6 +233,14 @@ watch(
   margin-bottom: 20px;
 }
 
+.eyebrow {
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 12px;
+  color: #8fb4ff;
+}
+
 h1 {
   margin: 0;
   font-size: clamp(2rem, 3vw, 3.4rem);
@@ -270,11 +254,7 @@ h1 {
   font-size: 16px;
   line-height: 1.55;
 }
-.roster-scroll {
-  max-height: 300px;   /* adjust this */
-  overflow-y: auto;
-  padding-right: 6px;  /* prevents scrollbar overlap */
-}
+
 .hero-card {
   display: grid;
   grid-template-columns: repeat(3, minmax(120px, 1fr));
@@ -307,7 +287,7 @@ h1 {
 
 .filters {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
   align-items: end;
   padding: 18px;
@@ -335,26 +315,6 @@ h1 {
   outline: none;
 }
 
-.mode-toggle {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.mode-btn {
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(255, 255, 255, 0.04);
-  color: #d8e7fb;
-  border-radius: 14px;
-  padding: 12px 14px;
-  cursor: pointer;
-}
-
-.mode-btn.active {
-  border-color: rgba(158, 208, 255, 0.7);
-  background: rgba(158, 208, 255, 0.14);
-}
-
 .filter-note {
   color: #9aa9c3;
   font-size: 13px;
@@ -380,6 +340,12 @@ h1 {
 .side {
   display: grid;
   gap: 16px;
+}
+
+.roster-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 6px;
 }
 
 @media (max-width: 1080px) {
