@@ -128,8 +128,7 @@ function featureCollection(features) {
   }
 }
 
-const selectedMarker = computed(() => props.studentMarkers.find((marker) => marker.selected) || props.studentMarkers[0])
-
+const selectedMarker = computed(() => props.studentMarkers.find((marker) => marker.selected) || null)
 function lerp(a, b, t) {
   return a + (b - a) * t
 }
@@ -143,6 +142,10 @@ function mapRange(value, inMin, inMax, outMin, outMax) {
 
 
 const selectedCircle = computed(() => {
+  if (!selectedMarker.value) {
+    return featureCollection([])
+  }
+
   const { activityPoint, socialRadiusKm, activePlaces, activePeople, connectedness } = props.weekData
   const riskTier = connectedness <= 45 ? 'higher' : connectedness <= 62 ? 'moderate' : 'lower'
 
@@ -159,9 +162,9 @@ const selectedCircle = computed(() => {
       type: 'Feature',
       properties: {
         kind: 'student',
-        name: selectedMarker.value?.name || 'Selected student',
-        major: selectedMarker.value?.major || '',
-        year: selectedMarker.value?.year || '',
+        name: selectedMarker.value.name,
+        major: selectedMarker.value.major,
+        year: selectedMarker.value.year,
         connectedness,
         activePlaces: activePlaces.length,
         activePeople: activePeople.length,
@@ -172,48 +175,24 @@ const selectedCircle = computed(() => {
     ...activePlaces.flatMap((place) => ([
       {
         type: 'Feature',
-        properties: {
-          kind: 'link',
-          linkType: 'place',
-          name: place.name,
-        },
-        geometry: {
-          type: 'LineString',
-          coordinates: [activityPoint, place.point],
-        },
+        properties: { kind: 'link', linkType: 'place', name: place.name },
+        geometry: { type: 'LineString', coordinates: [activityPoint, place.point] },
       },
       {
         type: 'Feature',
-        properties: {
-          kind: 'place',
-          name: place.name,
-          group: place.group,
-          weight: place.weight,
-        },
+        properties: { kind: 'place', name: place.name, group: place.group, weight: place.weight },
         geometry: { type: 'Point', coordinates: place.point },
       },
     ])),
     ...activePeople.flatMap((person) => ([
       {
         type: 'Feature',
-        properties: {
-          kind: 'link',
-          linkType: 'person',
-          name: person.name,
-        },
-        geometry: {
-          type: 'LineString',
-          coordinates: [activityPoint, person.point],
-        },
+        properties: { kind: 'link', linkType: 'person', name: person.name },
+        geometry: { type: 'LineString', coordinates: [activityPoint, person.point] },
       },
       {
         type: 'Feature',
-        properties: {
-          kind: 'person',
-          name: person.name,
-          group: person.group,
-          weight: person.weight,
-        },
+        properties: { kind: 'person', name: person.name, group: person.group, weight: person.weight },
         geometry: { type: 'Point', coordinates: person.point },
       },
     ])),
@@ -869,9 +848,11 @@ onBeforeUnmount(() => {
 
 .mini-popup {
   position: absolute;
-  right: 14px;
-  bottom: 14px;
-  width: min(340px, calc(100% - 28px));
+  left: 14px;
+  top: 14px;
+  right: auto;
+  bottom: auto;
+  width: min(320px, calc(100% - 28px));
   padding: 14px;
   border-radius: 18px;
   background: rgba(11, 18, 32, 0.92);
