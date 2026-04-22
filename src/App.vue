@@ -147,7 +147,7 @@ const groupOptions = [
 const week = ref(0)
 const cohortFilter = ref('all')
 const groupFilter = ref('all')
-const selectedStudentId = ref(students[0].id)
+const selectedStudentId = ref(null)
 const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN || ''
 
 const visibleStudents = computed(() => {

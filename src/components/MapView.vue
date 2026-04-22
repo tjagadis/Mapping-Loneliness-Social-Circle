@@ -15,7 +15,47 @@
       {{ errorMessage }}
     </div>
 
-    <div v-else ref="mapEl" class="map"></div>
+    <div v-else class="map-stage">
+      <div ref="mapEl" class="map"></div>
+
+      <div v-if="selectedMarker" class="mini-popup panel">
+        <div class="mini-popup-header">
+          <div>
+            <p class="eyebrow">Selected student</p>
+            <strong>{{ selectedMarker.name }}</strong>
+            <div class="mini-popup-sub">{{ selectedMarker.year }} · {{ selectedMarker.major }}</div>
+          </div>
+          <div class="mini-popup-chip">{{ selectedMarker.riskTier }}</div>
+        </div>
+
+        <svg viewBox="0 0 240 180" class="mini-network" role="img" :aria-label="`${selectedMarker.name} social circle preview`">
+          <line
+            v-for="link in miniNetwork.links"
+            :key="link.id"
+            :x1="link.x1"
+            :y1="link.y1"
+            :x2="link.x2"
+            :y2="link.y2"
+            :class="['mini-link', link.kind]"
+          />
+
+          <g v-for="node in miniNetwork.nodes" :key="node.id">
+            <circle :cx="node.x" :cy="node.y" :r="node.r" :class="['mini-node', node.kind]" />
+            <text :x="node.x + 8" :y="node.y - 8" class="mini-label">{{ node.label }}</text>
+          </g>
+
+          <circle :cx="miniNetwork.center.x" :cy="miniNetwork.center.y" :r="miniNetwork.radiusPx" class="mini-radius" />
+          <circle :cx="miniNetwork.center.x" :cy="miniNetwork.center.y" r="14" class="mini-center" />
+          <text :x="miniNetwork.center.x + 18" :y="miniNetwork.center.y + 5" class="mini-center-label">{{ selectedMarker.name }}</text>
+        </svg>
+
+        <div class="mini-popup-footer">
+          <span>{{ selectedMarker.connectedness }}/100 connectedness</span>
+          <span>{{ selectedMarker.activePeople }} people</span>
+          <span>{{ selectedMarker.activePlaces }} places</span>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -24,9 +64,12 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import mapboxgl from 'mapbox-gl'
 import { campusVenues } from '../data/uscSemester.js'
 
-const ZOOM_CHORO_MAX = 13.85
-const ZOOM_POINTS_MIN = 13.85
-const ZOOM_NETWORK_MIN = 15.8
+const ZOOM_CHORO_FADE_START = 13.25
+const ZOOM_CHORO_FADE_END = 14.65
+const ZOOM_POINTS_FADE_START = 13.85
+const ZOOM_POINTS_FADE_END = 15.05
+const ZOOM_NETWORK_FADE_START = 15.45
+const ZOOM_NETWORK_FADE_END = 16.25
 
 const props = defineProps({
   week: { type: Number, required: true },
@@ -86,6 +129,18 @@ function featureCollection(features) {
 }
 
 const selectedMarker = computed(() => props.studentMarkers.find((marker) => marker.selected) || props.studentMarkers[0])
+
+function lerp(a, b, t) {
+  return a + (b - a) * t
+}
+
+function mapRange(value, inMin, inMax, outMin, outMax) {
+  if (inMax === inMin) return outMin
+  const t = Math.max(0, Math.min(1, (value - inMin) / (inMax - inMin)))
+  return lerp(outMin, outMax, t)
+}
+
+
 
 const selectedCircle = computed(() => {
   const { activityPoint, socialRadiusKm, activePlaces, activePeople, connectedness } = props.weekData
@@ -167,6 +222,74 @@ const selectedCircle = computed(() => {
   return featureCollection(features)
 })
 
+const miniNetwork = computed(() => {
+  const centerFeature = selectedCircle.value.features.find((feature) => feature.properties?.kind === 'student')
+  const pointFeatures = selectedCircle.value.features.filter((feature) => ['student', 'place', 'person'].includes(feature.properties?.kind))
+  const linkFeatures = selectedCircle.value.features.filter((feature) => feature.properties?.kind === 'link')
+
+  const points = pointFeatures.map((feature) => feature.geometry.coordinates)
+  if (points.length === 0) {
+    return {
+      center: { x: 120, y: 90 },
+      nodes: [],
+      links: [],
+    }
+  }
+
+  const lngs = points.map(([lng]) => lng)
+  const lats = points.map(([, lat]) => lat)
+  const minLng = Math.min(...lngs)
+  const maxLng = Math.max(...lngs)
+  const minLat = Math.min(...lats)
+  const maxLat = Math.max(...lats)
+  const padX = 26
+  const padY = 24
+  const width = 188
+  const height = 132
+
+  const toXY = ([lng, lat]) => ({
+    x: padX + mapRange(lng, minLng, maxLng, 0, width),
+    y: padY + mapRange(lat, maxLat, minLat, 0, height),
+  })
+
+  const nodes = pointFeatures.map((feature) => {
+    const xy = toXY(feature.geometry.coordinates)
+    const kind = feature.properties.kind === 'student' ? 'student' : feature.properties.kind
+    const label = feature.properties.name
+    const r = kind === 'student' ? 11 : kind === 'person' ? 7 : 6
+    return {
+      id: `${feature.properties.kind}-${label}`,
+      kind,
+      label,
+      x: xy.x,
+      y: xy.y,
+      r,
+    }
+  })
+
+  const studentNode = nodes.find((node) => node.kind === 'student') || { x: 120, y: 90 }
+
+  const links = linkFeatures.map((feature, index) => {
+    const endPoint = feature.geometry.coordinates[1]
+    const xy = toXY(endPoint)
+    return {
+      id: `${feature.properties.linkType}-${index}`,
+      kind: feature.properties.linkType,
+      x1: studentNode.x,
+      y1: studentNode.y,
+      x2: xy.x,
+      y2: xy.y,
+    }
+  })
+
+  return {
+    center: studentNode,
+    nodes,
+    links,
+    radiusPx: mapRange(props.weekData.socialRadiusKm, 0.4, 3.4, 24, 58),
+  }
+})
+
 const studentMarkersGeoJSON = computed(() =>
   featureCollection(
     props.studentMarkers.map((marker) => ({
@@ -231,8 +354,8 @@ const zoneGeoJSON = computed(() =>
 )
 
 const stage = computed(() => {
-  if (currentZoom.value < ZOOM_CHORO_MAX) return 'choropleth'
-  if (currentZoom.value < ZOOM_NETWORK_MIN) return 'dots'
+  if (currentZoom.value < ZOOM_POINTS_FADE_START) return 'choropleth'
+  if (currentZoom.value < ZOOM_NETWORK_FADE_START) return 'dots'
   return 'network'
 })
 
@@ -327,27 +450,52 @@ function setVisibility(layerId, visible) {
   map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none')
 }
 
-function syncVisibility() {
+function syncZoomStyles() {
   if (!map) return
-  const isChoro = currentZoom.value < ZOOM_CHORO_MAX
-  const isDots = currentZoom.value >= ZOOM_POINTS_MIN
-  const isNetwork = currentZoom.value >= ZOOM_NETWORK_MIN
+  const z = currentZoom.value
 
-  setVisibility('zone-fill', isChoro)
-  setVisibility('zone-outline', isChoro)
-  setVisibility('zone-labels', isChoro)
+  const zoneFillOpacity = mapRange(z, ZOOM_CHORO_FADE_START, ZOOM_CHORO_FADE_END, 0.58, 0.05)
+  const zoneLineOpacity = mapRange(z, ZOOM_CHORO_FADE_START, ZOOM_CHORO_FADE_END, 0.24, 0.02)
+  const zoneLabelOpacity = mapRange(z, ZOOM_CHORO_FADE_START, ZOOM_CHORO_FADE_END - 0.3, 1, 0)
 
-  setVisibility('student-points', isDots)
-  setVisibility('student-labels', isDots)
-  setVisibility('venue-base', isDots)
-  setVisibility('venues-visited', isDots)
-  setVisibility('venue-labels', isDots)
+  const dotOpacity = mapRange(z, ZOOM_POINTS_FADE_START, ZOOM_POINTS_FADE_END, 0, 0.92)
+  const dotRadius = mapRange(z, ZOOM_POINTS_FADE_START, ZOOM_POINTS_FADE_END, 2, 13)
+  const venueVisitedRadius = mapRange(z, ZOOM_POINTS_FADE_START, ZOOM_POINTS_FADE_END, 4, 10)
+  const venueBaseOpacity = mapRange(z, ZOOM_POINTS_FADE_START, ZOOM_POINTS_FADE_END, 0, 0.72)
+  const venueLabelOpacity = mapRange(z, ZOOM_POINTS_FADE_START, ZOOM_POINTS_FADE_END, 0, 1)
 
-  setVisibility('social-radius', isNetwork)
-  setVisibility('selected-place-points', isNetwork)
-  setVisibility('selected-person-points', isNetwork)
-  setVisibility('selected-student-center', isNetwork)
-  setVisibility('selected-links', isNetwork)
+  const networkOpacity = mapRange(z, ZOOM_NETWORK_FADE_START, ZOOM_NETWORK_FADE_END, 0, 1)
+  const networkRadiusOpacity = mapRange(z, ZOOM_NETWORK_FADE_START, ZOOM_NETWORK_FADE_END, 0, 0.14)
+  const networkRadius = mapRange(z, ZOOM_NETWORK_FADE_START, ZOOM_NETWORK_FADE_END, 0, 20)
+
+  if (map.getLayer('zone-fill')) map.setPaintProperty('zone-fill', 'fill-opacity', zoneFillOpacity)
+  if (map.getLayer('zone-outline')) map.setPaintProperty('zone-outline', 'line-opacity', zoneLineOpacity)
+  if (map.getLayer('zone-labels')) map.setPaintProperty('zone-labels', 'text-opacity', zoneLabelOpacity)
+
+  if (map.getLayer('student-points')) {
+    map.setPaintProperty('student-points', 'circle-opacity', dotOpacity)
+    map.setPaintProperty('student-points', 'circle-radius', dotRadius)
+  }
+  if (map.getLayer('student-labels')) map.setPaintProperty('student-labels', 'text-opacity', dotOpacity)
+
+  if (map.getLayer('venue-base')) {
+    map.setPaintProperty('venue-base', 'circle-opacity', venueBaseOpacity)
+    map.setPaintProperty('venue-base', 'circle-radius', mapRange(z, ZOOM_POINTS_FADE_START, ZOOM_POINTS_FADE_END, 4, 6))
+  }
+  if (map.getLayer('venues-visited')) {
+    map.setPaintProperty('venues-visited', 'circle-opacity', venueBaseOpacity)
+    map.setPaintProperty('venues-visited', 'circle-radius', venueVisitedRadius)
+  }
+  if (map.getLayer('venue-labels')) map.setPaintProperty('venue-labels', 'text-opacity', venueLabelOpacity)
+
+  if (map.getLayer('social-radius')) map.setPaintProperty('social-radius', 'fill-opacity', networkRadiusOpacity)
+  if (map.getLayer('selected-place-points')) map.setPaintProperty('selected-place-points', 'circle-opacity', networkOpacity)
+  if (map.getLayer('selected-person-points')) map.setPaintProperty('selected-person-points', 'circle-opacity', networkOpacity)
+  if (map.getLayer('selected-student-center')) {
+    map.setPaintProperty('selected-student-center', 'circle-opacity', networkOpacity)
+    map.setPaintProperty('selected-student-center', 'circle-radius', networkRadius)
+  }
+  if (map.getLayer('selected-links')) map.setPaintProperty('selected-links', 'line-opacity', networkOpacity)
 }
 
 onMounted(() => {
@@ -363,7 +511,7 @@ onMounted(() => {
       container: mapEl.value,
       style: 'mapbox://styles/mapbox/dark-v11',
       center: [-118.2851, 34.0206],
-      zoom: 13.35,
+      zoom: 13.05,
       pitch: 32,
       bearing: -12,
       attributionControl: false,
@@ -381,12 +529,12 @@ onMounted(() => {
 
     map.on('zoom', () => {
       currentZoom.value = map.getZoom()
-      syncVisibility()
+      syncZoomStyles()
     })
 
     map.on('moveend', () => {
       currentZoom.value = map.getZoom()
-      syncVisibility()
+      syncZoomStyles()
     })
 
     map.on('load', () => {
@@ -662,7 +810,7 @@ onMounted(() => {
       })
 
       syncSources()
-      syncVisibility()
+      syncZoomStyles()
     })
   } catch (error) {
     errorMessage.value = error?.message || 'Unexpected Mapbox initialization error.'
@@ -675,7 +823,7 @@ watch(
   { deep: true },
 )
 
-watch(() => currentZoom.value, syncVisibility)
+watch(() => currentZoom.value, syncZoomStyles)
 
 onBeforeUnmount(() => {
   if (popup) popup.remove()
@@ -707,12 +855,136 @@ onBeforeUnmount(() => {
   color: #d8e7fb;
 }
 
+.map-stage {
+  position: relative;
+}
+
 .map {
   width: 100%;
   min-height: 560px;
   border-radius: 18px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.04);
+}
+
+.mini-popup {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  width: min(340px, calc(100% - 28px));
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(11, 18, 32, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+  z-index: 2;
+  backdrop-filter: blur(12px);
+}
+
+.mini-popup-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.mini-popup-header strong {
+  display: block;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.mini-popup-sub {
+  color: #9aa9c3;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.mini-popup-chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ecf6ff;
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.mini-network {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+  margin: 8px 0 8px;
+}
+
+.mini-link {
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.mini-link.person {
+  stroke: rgba(134, 239, 172, 0.75);
+}
+
+.mini-link.place {
+  stroke: rgba(196, 181, 253, 0.75);
+}
+
+.mini-node {
+  stroke: #08101d;
+  stroke-width: 2;
+}
+
+.mini-node.student {
+  fill: #9ed0ff;
+}
+
+.mini-node.person {
+  fill: #86efac;
+}
+
+.mini-node.place {
+  fill: #c4b5fd;
+}
+
+.mini-label {
+  fill: #ecf6ff;
+  font-size: 11px;
+  paint-order: stroke;
+  stroke: #08101d;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.mini-radius {
+  fill: none;
+  stroke: rgba(158, 208, 255, 0.26);
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+}
+
+.mini-center {
+  fill: rgba(158, 208, 255, 0.18);
+  stroke: #9ed0ff;
+  stroke-width: 3;
+}
+
+.mini-center-label {
+  fill: #ecf6ff;
+  font-size: 11px;
+  paint-order: stroke;
+  stroke: #08101d;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.mini-popup-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: #b4c4de;
+  font-size: 12px;
 }
 
 .map-error {
